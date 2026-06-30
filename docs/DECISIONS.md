@@ -19,7 +19,8 @@ end-to-end from the CLI.**
 | Embedding   | **One Hono app**; standalone **or** embedded             | Reverses spec D6 (dedicated-only). `createServer()` returns `app.fetch` to mount in a Next.js Route Handler; `@hono/node-server` for standalone. SSE needs a long-lived process |
 | Scope       | Lean text-only one-shot proxy                             | The observable `send()` path + debug plane                                                                                                                        |
 | Storage     | `InMemoryStore` **and** `PostgresStore`                   | One `ConversationStore` interface; same suite both backends (D1, D2)                                                                                              |
-| Migrations  | **Minimal in-repo runner** (`pg`)                         | Inlined ordered migrations (`src/db/migrations.ts`), ledger `cp_migrations` in the `conversation_proxy` schema, `pg_advisory_lock` apply (D12). Inlined (not on-disk SQL) so it's bundle-safe |
+| Identity    | **Scope IS the conversation id** (`/`-joined string)      | One scope ↔ one conversation; no separate handle. Branch a thread by appending `/<uuid>` (client convention). See "Scope as conversation id" below (D2) |
+| Migrations  | **Minimal in-repo runner** (`pg`)                         | Inlined ordered migrations (`src/db/migrations.ts`), ledger `cp_migrations` in the `conversation_proxy` schema, `pg_advisory_lock` apply (D12). Inlined (not on-disk SQL) so it's bundle-safe. Rewrite-in-place vs. forward-only is governed by [`MIGRATIONS.md`](./MIGRATIONS.md) |
 | Agents      | **Programmatic** + optional dir-scan                      | `createProxy({ agents })` is bundler-safe (primary for embedding); dir-scan of `*.agent.{ts,js}` for standalone (D11)                                              |
 | Provider    | **OpenAI** Chat Completions + `FakeProvider`              | Behind `LLMProxy` (node `fetch`); multi-provider routing deferred (Q5)                                                                                            |
 | Caching     | `PassthroughCache` only                                   | `usage.cached_tokens` recorded from day one (D4)                                                                                                                  |
@@ -51,6 +52,31 @@ in a Next.js app server while still running standalone:
   for deltas instead of holding a connection, so the old D6/D9 "SSE needs a
   long-lived process" caveat is gone. Use `CP_STORE=postgres` for the durable,
   multi-instance `debug_events` log; the in-memory ring buffer only sees one process.
+
+### Scope as conversation id (D2)
+
+The identity hierarchy is a single `/`-separated **string** (`"user_42/client_88"`),
+and that string **is** the conversation id — there is no separate `conversationId`.
+This reverses the earlier "ordered array + opaque conversation handle" shape.
+
+- **One scope ↔ one conversation.** Same scope → same thread; history accrues with
+  no client bookkeeping. `getConversation(scope)` is the lookup; the store keys on
+  it directly (Postgres `conversations.id text` holds the scope — opaque for
+  equality/FK, path-structured only for prefix queries).
+- **Branch a thread** by appending a unique segment (`/<uuid>`). Pure client
+  convention — the server never special-cases any segment, including the leaf.
+- **`/` is a reserved separator.** Segment values may not contain `/` or be empty;
+  malformed scopes (`a//c`, leading/trailing `/`, NUL, > 1024 chars) are **rejected
+  (400), not normalized** — a 400 surfaces a client's missing-id bug instead of
+  silently blending two callers into one conversation. Validated once at the facade
+  ingress (`validateScope`), so HTTP and embedded callers share the gate.
+- **Prefix queries are boundary-aware and inclusive:** `scope === prefix ||
+  starts_with(scope, prefix + "/")` — the node at the prefix and all descendants,
+  never a bare string-prefix match (`user_1` must not match `user_12`).
+- **`conversationId` is gone everywhere** — request input, `AgentResponse`,
+  `CallRecord`, `RecordFilter`, and debug events. LLM trace fidelity is unaffected:
+  Chat Completions is stateless (we own identity), and the per-call `chatcmpl-…` id
+  is still captured verbatim in `CallRecord.response.raw`.
 
 ## Deferred (designed, not built in v1)
 

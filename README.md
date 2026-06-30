@@ -29,9 +29,13 @@ your app ──HTTP / app.fetch──► conversation-proxy ──► OpenAI
 
 - **One front door.** `POST /agents/:agent/messages` → one reply. One-shot now,
   multi-step later, with no interface change.
-- **Generic hierarchy.** Conversations are addressed by an ordered array of opaque
-  IDs (e.g. `["user_42","client_88","patient_3","2026-W26"]`). The server attaches
-  no meaning to any level — the vet domain is just one example.
+- **Generic hierarchy.** A conversation is addressed by a `scope` — a `/`-separated
+  path of opaque IDs (e.g. `"user_42/client_88/patient_3/2026-W26"`). The scope
+  **is** the conversation id: same scope → same thread, history accrues
+  automatically. The server attaches no meaning to any segment — the vet domain is
+  just one example. To branch a fresh thread under one identity, append a
+  `/<uuid>` segment (a pure client convention). `/` is reserved; segment values
+  may not contain it or be empty.
 - **Agents are plain objects or single files.** Register them programmatically
   (`{ vet, summarize }`) or drop a `<name>.agent.ts` into `agents/`. Each declares
   how to assemble context, cache, and persist; missing hooks fall back to defaults.
