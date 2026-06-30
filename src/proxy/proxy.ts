@@ -81,7 +81,6 @@ export class ObservableLLMProxy implements LLMProxy {
     const record: CallRecord = {
       traceId,
       agent,
-      conversationId: ctx.conversationId,
       scope: ctx.scope,
       systemPrompt: req.prepared.systemPrompt,
       requestMessages: req.prepared.messages,

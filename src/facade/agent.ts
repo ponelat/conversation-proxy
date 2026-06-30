@@ -13,7 +13,7 @@ import type {
   DebugChannel,
   LLMProxy,
 } from "@/types/index";
-import { textContent } from "@/types/index";
+import { textContent, validateScope } from "@/types/index";
 import { readOnly } from "@/store/readonly";
 import { messageFromParts } from "@/assembler/parts";
 import { newTraceId, nowIso } from "@/util/ids";
@@ -33,19 +33,21 @@ export class PersistedConversationAgent implements ConversationAgent {
   async send(input: AgentInput): Promise<AgentResponse> {
     const agent = this.deps.registry.get(input.agent);
     if (!agent) throw new NotFound(`unknown agent: ${input.agent}`);
+    // Single ingress validation — rejects malformed scopes from any caller
+    // (HTTP or embedded) before anything touches the store (D2).
+    validateScope(input.scope);
 
     const traceId = newTraceId();
     const model = agent.model ?? this.deps.defaultModel;
     const { debug } = this.deps;
 
-    // 1. begin the turn — the hook decides (no-op + undefined for utility agents)
-    const conversationId = await agent.persist.beginTurn(input.scope, input.conversationId);
+    // 1. begin the turn — the hook decides (no-op for utility agents)
+    await agent.persist.beginTurn(input.scope);
 
     debug.emit({
       type: "request.received",
       traceId,
       agent: input.agent,
-      conversationId,
       scope: input.scope,
       ts: nowIso(),
     });
@@ -53,7 +55,7 @@ export class PersistedConversationAgent implements ConversationAgent {
     // 2. assemble context via the agent's hook (history may be [] for utility agents)
     const assembled = await agent.assemble({
       scope: input.scope,
-      conversationId,
+      persisted: agent.persists,
       message: input.input,
       store: readOnly(this.deps.store),
     });
@@ -78,7 +80,7 @@ export class PersistedConversationAgent implements ConversationAgent {
     });
 
     // 4. call the LLM through the observability proxy (emits llm.* + writes CallRecord)
-    const ctx: CallContext = { agent: input.agent, conversationId, scope: input.scope, traceId };
+    const ctx: CallContext = { agent: input.agent, scope: input.scope, traceId };
     let res;
     try {
       res = await this.deps.proxy.complete({ prepared, model }, ctx);
@@ -92,8 +94,8 @@ export class PersistedConversationAgent implements ConversationAgent {
     // 5. persist the turn — again, the hook decides (no-op for utility agents)
     const userMsg = messageFromParts("user", input.input);
     const assistantMsg = messageFromParts("assistant", textContent(res.reply));
-    await agent.persist.endTurn(input.scope, conversationId, userMsg, assistantMsg);
+    await agent.persist.endTurn(input.scope, userMsg, assistantMsg);
 
-    return { reply: res.reply, conversationId, traceId, usage: res.usage };
+    return { reply: res.reply, traceId, usage: res.usage };
   }
 }
