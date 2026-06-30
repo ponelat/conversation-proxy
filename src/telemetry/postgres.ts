@@ -24,13 +24,12 @@ export class PostgresCallRecordStore implements CallRecordStore {
     const t = this.schema;
     await this.pool.query(
       `insert into "${t}".call_records
-         (trace_id, agent, conversation_id, scope_arr, model, reply_preview, ts, envelope)
-       values ($1, $2, $3, $4::text[], $5, $6, $7::timestamptz, $8::jsonb)
+         (trace_id, agent, scope, model, reply_preview, ts, envelope)
+       values ($1, $2, $3, $4, $5, $6::timestamptz, $7::jsonb)
        on conflict (trace_id) do update set envelope = excluded.envelope`,
       [
         record.traceId,
         record.agent,
-        record.conversationId ?? null,
         record.scope,
         record.model,
         record.response.reply.slice(0, 120),
@@ -58,15 +57,14 @@ export class PostgresCallRecordStore implements CallRecordStore {
       clauses.push(sql.replace("$?", `$${args.length}`));
     };
     if (filter.agent) add("agent = $?", filter.agent);
-    if (filter.conversationId) add("conversation_id = $?", filter.conversationId);
+    if (filter.scope) add("scope = $?", filter.scope);
     if (filter.model) add("model = $?", filter.model);
     if (filter.since) add("ts >= $?::timestamptz", filter.since);
     if (filter.until) add("ts <= $?::timestamptz", filter.until);
     if (filter.scopePrefix) {
       args.push(filter.scopePrefix);
-      const arrIdx = args.length;
-      args.push(filter.scopePrefix.length);
-      clauses.push(`scope_arr[1:$${args.length}] = $${arrIdx}::text[]`);
+      // Boundary-aware: the exact scope or any descendant under "prefix/".
+      clauses.push(`(scope = $${args.length} or starts_with(scope, $${args.length} || '/'))`);
     }
     const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
     const { rows } = await this.pool.query<{ envelope: CallRecord }>(

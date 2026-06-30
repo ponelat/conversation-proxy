@@ -24,9 +24,10 @@ Usage:
   conversation-proxy migrate:status                 print applied/pending migrations
 
   conversation-proxy agents                         list loaded agents
-  conversation-proxy send --agent <a> --scope a/b/c --input "..." [--conversation <id>]
-  conversation-proxy preview --agent <a> --scope a/b/c [--conversation <id>]
-  conversation-proxy record <traceId>               fetch a call envelope
+  conversation-proxy send --agent <a> --scope a/b/c --input "..."
+  conversation-proxy preview --agent <a> --scope a/b/c
+  conversation-proxy record [<traceId>] [--scope a/b/c] [--agent <a>]   fetch one call envelope (latest for --scope[+--agent] if no id)
+  conversation-proxy records --scope a/b/c [--agent <a>]   list a scope's call records (trace ids)
   conversation-proxy explore --scope a/b/c          browse storage (debug plane)
   conversation-proxy stream [--trace <id>] [--agent <a>] [--types a,b]   tail debug events
 
@@ -70,7 +71,6 @@ async function main() {
       agent: { type: "string" },
       scope: { type: "string" },
       input: { type: "string" },
-      conversation: { type: "string" },
       trace: { type: "string" },
       types: { type: "string" },
       "migrate-on-startup": { type: "boolean" },
@@ -116,12 +116,11 @@ async function main() {
       const res = await client().send({
         agent: flags.agent,
         scope: parseScope(flags.scope),
-        conversationId: flags.conversation,
         input: [{ kind: "text", text: flags.input }],
       });
       console.log(res.reply);
       console.error(
-        `\ntraceId=${res.traceId}${res.conversationId ? ` conversationId=${res.conversationId}` : ""} ` +
+        `\ntraceId=${res.traceId} ` +
           `tokens(prompt/completion/cached)=${res.usage.promptTokens}/${res.usage.completionTokens}/${res.usage.cachedTokens}`,
       );
       break;
@@ -129,14 +128,33 @@ async function main() {
 
     case "preview": {
       if (!flags.agent || !flags.scope) throw new Error("preview requires --agent and --scope");
-      pretty(await client().previewContext(flags.agent, parseScope(flags.scope), flags.conversation));
+      pretty(await client().previewContext(flags.agent, parseScope(flags.scope)));
       break;
     }
 
     case "record": {
-      const traceId = flags.trace ?? positionals[0];
-      if (!traceId) throw new Error("record requires a traceId");
+      let traceId = flags.trace ?? positionals[0];
+      if (!traceId && flags.scope) {
+        // No trace id — resolve the latest call record for the scope (and agent, if given).
+        const recs = await client().queryRecords({
+          scope: parseScope(flags.scope),
+          agent: flags.agent,
+        });
+        const where = `scope=${flags.scope}${flags.agent ? ` agent=${flags.agent}` : ""}`;
+        if (recs.length === 0) throw new Error(`no call records for ${where}`);
+        traceId = recs[0].traceId; // queryRecords returns most-recent first
+        console.error(`using latest traceId=${traceId} for ${where}`);
+      }
+      if (!traceId) throw new Error("record requires a traceId or --scope");
       pretty(await client().getRecord(traceId));
+      break;
+    }
+
+    case "records": {
+      if (!flags.scope) throw new Error("records requires --scope");
+      pretty(
+        await client().queryRecords({ scope: parseScope(flags.scope), agent: flags.agent }),
+      );
       break;
     }
 

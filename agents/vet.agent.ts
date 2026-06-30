@@ -10,8 +10,8 @@ const SYSTEM_PROMPT = "You are a careful veterinary assistant. Ask clarifying qu
 
 export default function (): Promise<AgentManifest> {
   return Promise.resolve({
-    async assemble({ conversationId, message, store }) {
-      const history = conversationId ? await store.getMessages(conversationId) : [];
+    async assemble({ scope, persisted, message, store }) {
+      const history = persisted ? await store.getMessages(scope) : [];
       return {
         segments: [
           // most-stable first: a static system prompt shared across every turn

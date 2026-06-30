@@ -1,14 +1,13 @@
 # What was NOT done in v1
 
-A deliberately complete, honest inventory of everything in the design
-([`spec-files/`](../spec-files)) and the build plan that v1 does **not** include —
-plus the caveats on what it does include. v1's mandate was a *lean, observable,
-reliable core* with "avoid extra features," so most of this is intentional
-scope-cutting, not oversight. See [`DECISIONS.md`](./DECISIONS.md) for the
-positive list of what shipped.
+A deliberately complete, honest inventory of the design and build plan that v1
+does **not** include — plus the caveats on what it does include. v1's mandate was
+a *lean, observable, reliable core* with "avoid extra features," so most of this
+is intentional scope-cutting, not oversight. See [`DECISIONS.md`](./DECISIONS.md)
+for the positive list of what shipped.
 
 Legend: **D#/Q#** reference the firm decisions / open questions in
-[`CONVERSATION_PROXY_HANDOFF.md`](../spec-files/CONVERSATION_PROXY_HANDOFF.md).
+[`DESIGN.md`](./DESIGN.md).
 
 ---
 
@@ -67,10 +66,12 @@ Things that exist but are partial, simplified, or have sharp edges worth knowing
   enforce a budget or truncate history — `totalTokens` is informational only.
 - **`tool`-role messages are passed as plain text** to OpenAI. No `tool_call_id`,
   no function/tool-call plumbing (consistent with no tool loop).
-- **Scope storage differs by backend.** In-memory uses the NUL-separated
-  `scopeKey`; Postgres can't store NUL in `text`, so it stores scope only as
-  `scope_arr text[]` and matches via array equality (no `scope_key` column). Same
-  behavior, different mechanism — noted so nobody expects a `scope_key` column in PG.
+- **Scope prefix queries are not index-backed.** Both backends key on the scope
+  string identically (the scope IS the id, D2): in-memory uses it as the `Map` key,
+  Postgres as `conversations.id text` (PK). Equality lookups use the PK/Map; the
+  boundary-aware prefix query (`starts_with(id, prefix || '/')`, used by the debug
+  explorer and `scopePrefix` record filter) is a sequential scan — fine for v1's
+  admin/debug volume, not for hot-path use at scale.
 - **Migration statement splitting is naive.** `src/db/migrate.ts` strips line
   comments then splits on `;`. It assumes **no semicolons inside string literals**
   in migration files. Fine for our DDL; a gotcha for future data migrations.

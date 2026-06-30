@@ -55,12 +55,12 @@ test("end-to-end: send → polled events → record → persistence", async () =
     );
 
     // --- persisting agent --------------------------------------------------
+    const scope = "user_42/client_88";
     const res = await client.send({
       agent: "vet",
-      scope: ["user_42", "client_88"],
+      scope,
       input: textContent("Bella is vomiting"),
     });
-    assert(res.conversationId, "persisting agent returns a conversationId");
     assert(res.reply.includes("Bella is vomiting"));
     assert(res.usage.promptTokens > 0, "real token usage recorded");
 
@@ -83,26 +83,24 @@ test("end-to-end: send → polled events → record → persistence", async () =
     // the call envelope is fetchable by traceId
     const rec = await client.getRecord(res.traceId);
     assertEquals(rec.agent, "vet");
-    assertEquals(rec.scope, ["user_42", "client_88"]);
+    assertEquals(rec.scope, scope);
     assert(rec.systemPrompt.includes("veterinary"));
 
-    // both turns persisted under the conversation
-    const conv = await client.getConversation(res.conversationId!);
+    // both turns persisted under the conversation (addressed by scope)
+    const conv = await client.getConversation(scope);
     assertEquals(conv.messages.map((m) => m.role), ["user", "assistant"]);
 
     // --- utility agent (persist:false) -------------------------------------
     const util = await client.send({
       agent: "summarize",
-      scope: ["user_42"],
+      scope: "user_42",
       input: textContent("a long document"),
     });
-    assertEquals(util.conversationId, undefined);
-    assertEquals((await client.listConversations(["user_42"])).length, 0);
     const utilRec = await client.getRecord(util.traceId);
     assertEquals(utilRec.agent, "summarize");
 
     // --- debug explorer ----------------------------------------------------
-    const explored = await client.explore(["user_42"]);
+    const explored = await client.explore("user_42");
     assert(explored.records.length >= 2, "records visible under the user prefix");
   } finally {
     await close();

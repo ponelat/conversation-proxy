@@ -7,7 +7,6 @@ import type {
   AssembledContext,
   CallRecordStore,
   ContextExplorer,
-  ConversationId,
   ConversationScope,
   ConversationStore,
 } from "@/types/index";
@@ -45,14 +44,13 @@ export class DefaultContextExplorer implements ContextExplorer {
   async previewContext(
     agent: string,
     scope: ConversationScope,
-    conversationId?: ConversationId,
   ): Promise<AssembledContext> {
     const resolved = this.registry.get(agent);
     if (!resolved) throw new NotFound(`unknown agent: ${agent}`);
     // Preview the prefix the agent would build right now, with no incoming turn.
     return await resolved.assemble({
       scope,
-      conversationId,
+      persisted: resolved.persists,
       message: [],
       store: readOnly(this.store),
     });

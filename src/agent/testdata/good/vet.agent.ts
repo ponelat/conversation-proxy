@@ -4,9 +4,9 @@ import { assembledFromParts, PROMPT, systemNote, toAssembledMessage } from "./he
 
 export default function (): Promise<AgentManifest> {
   return Promise.resolve({
-    assemble({ conversationId, message, store }) {
+    assemble({ scope, persisted, message, store }) {
       return (async () => {
-        const history = conversationId ? await store.getMessages(conversationId) : [];
+        const history = persisted ? await store.getMessages(scope) : [];
         return {
           segments: [
             { source: "system", stability: "static" as const, messages: [systemNote(PROMPT)] },

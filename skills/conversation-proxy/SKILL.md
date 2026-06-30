@@ -51,9 +51,10 @@ npm run serve                     # http://localhost:8787  (or: npx tsx src/main
 | Command | Needs server | Output |
 |---|---|---|
 | `agents` | yes | JSON: `[{name, persists}]` |
-| `send --agent <a> --scope a/b/c --input "..." [--conversation <id>]` | yes | reply on **stdout**; `traceId`/`conversationId`/usage on **stderr** |
-| `preview --agent <a> --scope a/b/c [--conversation <id>]` | yes | JSON `AssembledContext` (no LLM call) |
-| `record <traceId>` | yes | JSON `CallRecord` (the full envelope sent) |
+| `send --agent <a> --scope a/b/c --input "..."` | yes | reply on **stdout**; `traceId`/usage on **stderr** |
+| `preview --agent <a> --scope a/b/c` | yes | JSON `AssembledContext` (no LLM call) |
+| `record [<traceId>] [--scope a/b/c] [--agent <a>]` | yes | JSON `CallRecord` (full envelope). With `--scope` and no id, resolves the **latest** trace for that scope (and `--agent`, if given) |
+| `records --scope a/b/c [--agent <a>]` | yes | JSON `CallRecordMeta[]` — a scope's traces (most-recent first), each with its `traceId` |
 | `explore --scope a/b/c` | yes (debug enabled) | JSON `{conversations, records}` |
 | `stream [--trace <id>] [--agent <a>] [--types a,b]` | yes (debug enabled) | tails debug events (polls; Ctrl-C to stop) |
 | `serve [--migrate-on-startup]` | — | starts the service |
@@ -65,36 +66,47 @@ npm run serve                     # http://localhost:8787  (or: npx tsx src/main
 npx tsx src/main.ts send --agent vet --scope user_42/client_88 --input "Bella is vomiting"
 ```
 
-- **`--scope`** is the identity hierarchy, slash-joined (`user_42/client_88/...`).
-  It's opaque — any convention works.
+- **`--scope`** is the conversation identity: a `/`-joined hierarchy
+  (`user_42/client_88/...`). The scope **is** the conversation id — segments are
+  opaque, but `/` is reserved (no empty segments; `a//c` is a 400).
 - **`--agent`** is the agent name. `default` always exists; `vet` (persisting) and
   `summarize` (`persist:false` utility) ship as examples. List them with `agents`.
-- The reply prints to **stdout**. The `traceId` and `conversationId` print to
-  **stderr** as: `traceId=tr_... conversationId=... tokens(prompt/completion/cached)=…`.
+- The reply prints to **stdout**. The `traceId` and usage print to **stderr** as:
+  `traceId=tr_... tokens(prompt/completion/cached)=…`.
 
 ### Continue a conversation (append)
 
-The `conversationId` is on the **stderr** status line of a `send` to a *persisting*
-agent. Capture it, then pass it back with `--conversation`:
+There is no conversation handle to thread — **reuse the same scope** and history
+accrues automatically:
 
 ```sh
-# turn 1 — capture the id from stderr
-CID=$(npx tsx src/main.ts send --agent vet --scope u/c --input "first" 2>&1 1>/dev/null \
-        | grep -o 'conversationId=[^ ]*' | cut -d= -f2)
-
-# turn 2 — append to the same thread
-npx tsx src/main.ts send --agent vet --scope u/c --conversation "$CID" --input "follow-up"
+# turn 1
+npx tsx src/main.ts send --agent vet --scope u/c --input "first"
+# turn 2 — same scope continues the same thread
+npx tsx src/main.ts send --agent vet --scope u/c --input "follow-up"
 ```
 
-> **Note:** `persist:false` agents (e.g. `summarize`) intentionally return **no**
-> `conversationId` and store nothing — each call is independent.
+To start a **fresh** thread under the same identity, append a unique segment
+(e.g. a UUID): `--scope u/c/$(uuidgen)`.
+
+> **Note:** `persist:false` agents (e.g. `summarize`) store nothing — each call is
+> independent regardless of scope.
 
 ### Inspect what was / would be sent
 
 ```sh
-npx tsx src/main.ts record <traceId>                       # exact context + usage + latency for a past call
+npx tsx src/main.ts record --scope u/c                     # full envelope of the scope's LATEST call (no traceId needed)
+npx tsx src/main.ts records --scope u/c                    # all traces for a scope, most-recent first
+npx tsx src/main.ts record <traceId>                       # exact context + usage + latency for one call
 npx tsx src/main.ts preview --agent vet --scope u/c        # what WOULD be assembled, no LLM call
 ```
+
+The "I have a scope, not a trace id" path: `record --scope u/c` jumps straight to
+the conversation's **latest** envelope (it prints the chosen `traceId` to stderr),
+while `records --scope u/c` lists them all so you can pick an earlier one to feed
+into `record <traceId>`. Add `--agent <a>` to either to narrow to one agent's
+calls (e.g. the latest `vet` trace on a scope). Both match the exact scope, not
+its `/<uuid>` branches.
 
 ### Watch / poll debug events
 
@@ -144,6 +156,8 @@ npm test         # full vitest suite (in-memory)
 - **`404` on `/debug/*` or `explore`/`stream`** → `CP_DEBUG_ENABLED` is not `true`.
 - **A `send` failed but you want the envelope** → the error line still prints a
   `traceId`; `record <traceId>` returns the error envelope.
-- **No `conversationId` returned** → the agent is `persist:false` (expected), or you
-  read stdout only — it's on **stderr**.
+- **History not continuing across turns** → you changed the `--scope`. Same scope =
+  same thread; a different scope (or a stray `/<uuid>`) is a *new* conversation.
+- **`400` "scope has an empty segment"** → a `/`-joined scope with a missing piece
+  (`a//c`, leading/trailing `/`) — usually an undefined id on the client side.
 - **OpenAI `429 insufficient_quota`** → provider works; the OpenAI account needs billing.

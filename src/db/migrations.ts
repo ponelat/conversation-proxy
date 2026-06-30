@@ -12,21 +12,19 @@ export const MIGRATIONS: Migration[] = [
   {
     id: "001_init",
     statements: [
-      // Postgres text cannot hold the NUL scope separator the in-memory store
-      // uses, so scope lives only as the array; exact/prefix matches use array
-      // equality on scope_arr.
+      // The scope IS the conversation id (D2): `id` holds the "/"-joined scope
+      // string. Opaque for equality/FK; path-structured only for prefix queries
+      // (`starts_with(id, prefix || '/')`).
       `create table if not exists conversations (
-         id          uuid primary key,
-         scope_arr   text[] not null,
+         id          text primary key,
          title       text,
          metadata    jsonb not null default '{}',
          created_at  timestamptz not null,
          updated_at  timestamptz not null
        )`,
-      `create index if not exists conversations_scope_arr_idx on conversations using gin (scope_arr)`,
       `create table if not exists messages (
          id              uuid primary key,
-         conversation_id uuid not null references conversations (id) on delete cascade,
+         conversation_id text not null references conversations (id) on delete cascade,
          role            text not null,
          content         jsonb not null,
          token_count     int,
@@ -40,17 +38,16 @@ export const MIGRATIONS: Migration[] = [
     id: "002_call_records",
     statements: [
       `create table if not exists call_records (
-         trace_id        text primary key,
-         agent           text not null,
-         conversation_id uuid,
-         scope_arr       text[] not null,
-         model           text not null,
-         reply_preview   text,
-         ts              timestamptz not null,
-         envelope        jsonb not null
+         trace_id      text primary key,
+         agent         text not null,
+         scope         text not null,
+         model         text not null,
+         reply_preview text,
+         ts            timestamptz not null,
+         envelope      jsonb not null
        )`,
       `create index if not exists call_records_agent_idx on call_records (agent)`,
-      `create index if not exists call_records_scope_idx on call_records using gin (scope_arr)`,
+      `create index if not exists call_records_scope_idx on call_records (scope)`,
       `create index if not exists call_records_ts_idx on call_records (ts)`,
     ],
   },

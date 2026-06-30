@@ -6,13 +6,13 @@ import type {
   CallRecordFilter,
   CallRecordMeta,
   CallRecordStore,
+  ConversationScope,
 } from "@/types/index";
-import { scopeKey } from "@/types/index";
 import { toMeta } from "./meta";
 
-function startsWithScope(scope: string[], prefix: string[]): boolean {
-  if (prefix.length > scope.length) return false;
-  return scopeKey(scope.slice(0, prefix.length)) === scopeKey(prefix);
+/** Boundary-aware: the exact scope or any descendant (never a bare string prefix). */
+function underPrefix(scope: ConversationScope, prefix: ConversationScope): boolean {
+  return scope === prefix || scope.startsWith(prefix + "/");
 }
 
 export class InMemoryCallRecordStore implements CallRecordStore {
@@ -30,9 +30,9 @@ export class InMemoryCallRecordStore implements CallRecordStore {
   query(filter: CallRecordFilter): Promise<CallRecordMeta[]> {
     const out = [...this.#byTrace.values()]
       .filter((r) => (filter.agent ? r.agent === filter.agent : true))
-      .filter((r) => (filter.conversationId ? r.conversationId === filter.conversationId : true))
       .filter((r) => (filter.model ? r.model === filter.model : true))
-      .filter((r) => (filter.scopePrefix ? startsWithScope(r.scope, filter.scopePrefix) : true))
+      .filter((r) => (filter.scope ? r.scope === filter.scope : true))
+      .filter((r) => (filter.scopePrefix ? underPrefix(r.scope, filter.scopePrefix) : true))
       .filter((r) => (filter.since ? r.timestamp >= filter.since : true))
       .filter((r) => (filter.until ? r.timestamp <= filter.until : true))
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))

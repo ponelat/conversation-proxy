@@ -1,9 +1,10 @@
 // PostgresStore — the durable ConversationStore (D1, D2). Same interface as
 // InMemoryStore; all tables live in the service's dedicated schema (D12).
+// The `id` column holds the scope string (the scope IS the conversation id, D2):
+// opaque for equality/FK, path-structured only for the prefix query.
 
 import type {
   Conversation,
-  ConversationId,
   ConversationMeta,
   ConversationScope,
   ConversationStore,
@@ -12,11 +13,10 @@ import type {
   StoredMessage,
 } from "@/types/index";
 import { assertIdentifier, makePool, type Pool } from "@/db/pg";
-import { newId, nowIso } from "@/util/ids";
+import { nowIso } from "@/util/ids";
 
 interface ConvRow {
-  id: string;
-  scope_arr: string[];
+  id: string; // the scope string
   title: string | null;
   metadata: Record<string, unknown>;
   created_at: Date;
@@ -43,8 +43,7 @@ export class PostgresStore implements ConversationStore {
 
   #convMeta(r: ConvRow): ConversationMeta {
     return {
-      id: r.id,
-      scope: r.scope_arr,
+      scope: r.id,
       title: r.title ?? undefined,
       metadata: r.metadata,
       createdAt: iso(r.created_at),
@@ -63,73 +62,48 @@ export class PostgresStore implements ConversationStore {
     };
   }
 
-  async listConversations(scope: ConversationScope): Promise<ConversationMeta[]> {
-    const t = this.schema;
-    const { rows } = await this.pool.query<ConvRow>(
-      `select id, scope_arr, title, metadata, created_at, updated_at from "${t}".conversations
-       where scope_arr = $1::text[] order by updated_at desc`,
-      [scope],
-    );
-    return rows.map((r) => this.#convMeta(r));
-  }
-
   async listConversationsByPrefix(prefix: ConversationScope): Promise<ConversationMeta[]> {
     const t = this.schema;
+    // Boundary-aware: the exact scope or any descendant under "prefix/".
     const { rows } = await this.pool.query<ConvRow>(
-      `select id, scope_arr, title, metadata, created_at, updated_at from "${t}".conversations
-       where scope_arr[1:$2] = $1::text[] order by updated_at desc`,
-      [prefix, prefix.length],
+      `select id, title, metadata, created_at, updated_at from "${t}".conversations
+       where id = $1 or starts_with(id, $1 || '/') order by updated_at desc`,
+      [prefix],
     );
     return rows.map((r) => this.#convMeta(r));
   }
 
-  async getConversation(id: ConversationId): Promise<Conversation | null> {
+  async getConversation(scope: ConversationScope): Promise<Conversation | null> {
     const t = this.schema;
     const { rows } = await this.pool.query<ConvRow>(
-      `select id, scope_arr, title, metadata, created_at, updated_at from "${t}".conversations
-       where id = $1`,
-      [id],
+      `select id, title, metadata, created_at, updated_at from "${t}".conversations where id = $1`,
+      [scope],
     );
     if (rows.length === 0) return null;
     const { rows: msgs } = await this.pool.query<MsgRow>(
       `select id, role, content, token_count, metadata, created_at from "${t}".messages
        where conversation_id = $1 order by created_at asc`,
-      [id],
+      [scope],
     );
     return { ...this.#convMeta(rows[0]), messages: msgs.map((m) => this.#msg(m)) };
   }
 
-  async createConversation(
-    scope: ConversationScope,
-    meta?: Partial<ConversationMeta>,
-  ): Promise<Conversation> {
+  async getOrCreateConversation(scope: ConversationScope): Promise<Conversation> {
     const t = this.schema;
     const ts = nowIso();
-    const full: ConversationMeta = {
-      id: meta?.id ?? newId(),
-      scope,
-      title: meta?.title,
-      createdAt: meta?.createdAt ?? ts,
-      updatedAt: meta?.updatedAt ?? ts,
-      metadata: meta?.metadata,
-    };
+    // Race-safe via the PK: a concurrent first turn no-ops instead of erroring.
     await this.pool.query(
-      `insert into "${t}".conversations
-         (id, scope_arr, title, metadata, created_at, updated_at)
-       values ($1, $2::text[], $3, $4::jsonb, $5::timestamptz, $6::timestamptz)`,
-      [
-        full.id,
-        scope,
-        full.title ?? null,
-        JSON.stringify(full.metadata ?? {}),
-        full.createdAt,
-        full.updatedAt,
-      ],
+      `insert into "${t}".conversations (id, title, metadata, created_at, updated_at)
+       values ($1, null, '{}'::jsonb, $2::timestamptz, $2::timestamptz)
+       on conflict (id) do nothing`,
+      [scope, ts],
     );
-    return { ...full, messages: [] };
+    const conv = await this.getConversation(scope);
+    if (!conv) throw new Error(`failed to create conversation: ${scope}`);
+    return conv;
   }
 
-  async appendMessages(id: ConversationId, msgs: StoredMessage[]): Promise<void> {
+  async appendMessages(scope: ConversationScope, msgs: StoredMessage[]): Promise<void> {
     const t = this.schema;
     const client = await this.pool.connect();
     try {
@@ -141,7 +115,7 @@ export class PostgresStore implements ConversationStore {
            values ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::timestamptz)`,
           [
             m.id,
-            id,
+            scope,
             m.role,
             JSON.stringify(m.content),
             m.tokenCount ?? null,
@@ -150,7 +124,7 @@ export class PostgresStore implements ConversationStore {
           ],
         );
       }
-      await client.query(`update "${t}".conversations set updated_at = now() where id = $1`, [id]);
+      await client.query(`update "${t}".conversations set updated_at = now() where id = $1`, [scope]);
       await client.query("commit");
     } catch (e) {
       await client.query("rollback");
@@ -161,11 +135,11 @@ export class PostgresStore implements ConversationStore {
   }
 
   async getMessages(
-    id: ConversationId,
+    scope: ConversationScope,
     opts?: { limit?: number; before?: string },
   ): Promise<StoredMessage[]> {
     const t = this.schema;
-    const args: unknown[] = [id];
+    const args: unknown[] = [scope];
     let where = `conversation_id = $1`;
     if (opts?.before) {
       args.push(opts.before);

@@ -138,7 +138,7 @@
     </div>
     <div class="card">
       <h3><span class="dot" style="background:var(--accent)"></span>Generic hierarchy</h3>
-      <p>Conversations are addressed by an ordered array of opaque IDs (<code>["user_42","client_88",…]</code>). The server attaches no meaning to any level.</p>
+      <p>A conversation is addressed by a <code>/</code>-joined scope (<code>"user_42/client_88"</code>) — the scope <b>is</b> the id. Same scope → same thread. The server attaches no meaning to any segment.</p>
     </div>
     <div class="card">
       <h3><span class="dot" style="background:var(--purple)"></span>Observable by default</h3>
@@ -338,9 +338,7 @@ GET /debug/events?after=47&amp;traceId=tr_…
       <tr><td><span class="pill get">GET</span></td><td><code>/agents</code></td><td><span class="pill ctrl">control</span></td><td>list loaded agents</td></tr>
       <tr><td><span class="pill post">POST</span></td><td><code>/agents/:agent/messages</code></td><td><span class="pill ctrl">control</span></td><td>the <code>send()</code> front door</td></tr>
       <tr><td><span class="pill get">GET</span></td><td><code>/agents/:agent/context</code></td><td><span class="pill ctrl">control</span></td><td>preview context (no LLM)</td></tr>
-      <tr><td><span class="pill post">POST</span></td><td><code>/conversations</code></td><td><span class="pill ctrl">control</span></td><td>create</td></tr>
-      <tr><td><span class="pill get">GET</span></td><td><code>/conversations?scope=…</code></td><td><span class="pill ctrl">control</span></td><td>list by exact scope</td></tr>
-      <tr><td><span class="pill get">GET</span></td><td><code>/conversations/:id</code></td><td><span class="pill ctrl">control</span></td><td>fetch + messages</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/conversations?scope=…</code></td><td><span class="pill ctrl">control</span></td><td>fetch the conversation + messages for a scope</td></tr>
       <tr><td><span class="pill get">GET</span></td><td><code>/records/:traceId</code></td><td><span class="pill ctrl">control</span></td><td>one call envelope</td></tr>
       <tr><td><span class="pill get">GET</span></td><td><code>/records?agent=&amp;scopePrefix=…</code></td><td><span class="pill ctrl">control</span></td><td>query envelopes</td></tr>
       <tr><td><span class="pill get">GET</span></td><td><code>/debug/events?after=…</code></td><td><span class="pill dbg">debug</span></td><td>poll event deltas</td></tr>
@@ -349,6 +347,10 @@ GET /debug/events?after=47&amp;traceId=tr_…
       <tr><td><span class="pill get">GET</span></td><td><code>/debug/explore?scope=…</code></td><td><span class="pill dbg">debug</span></td><td>browse storage + records</td></tr>
     </tbody>
   </table>
+  <p style="margin-top:14px" class="note"><b>No explicit conversation creation.</b>
+     A conversation comes into being by being talked to (<code>POST /agents/:agent/messages</code>);
+     the scope is the id, so there is no separate create call and no handle to thread —
+     reuse the scope to continue, append a <code>/&lt;uuid&gt;</code> segment to branch.</p>
 </section>
 
 <!-- DECISIONS -->
@@ -358,13 +360,13 @@ GET /debug/events?after=47&amp;traceId=tr_…
      plus the three reversed during the build.</p>
   <div class="grid cols-2">
     <div class="card"><h3>Three separable layers</h3><p>Store · Assembler · CacheStrategy, plus the Proxy. Each changes for a different reason. <span class="file">D1</span></p></div>
-    <div class="card"><h3>Identity is a generic array</h3><p>Ordered opaque IDs, leaf last. New levels are just longer arrays; order enables prefix lookup. <span class="file">D2</span></p></div>
+    <div class="card"><h3>Scope is the conversation id <span class="tag">reversed D2</span></h3><p>A <code>/</code>-joined string of opaque segments IS the id — one scope, one thread. Boundary-aware prefix lookup; branch with a <code>/&lt;uuid&gt;</code> segment. <span class="file">D2</span></p></div>
     <div class="card"><h3>Persistence is a hook, not a mode</h3><p>“One-shot” = <code>persist:false</code>. One front door, one observability path. <span class="file">D15</span></p></div>
     <div class="card"><h3>Caching starts as passthrough</h3><p>Correctness first; usage recorded so prefix caching can be justified by data later. <span class="file">D4</span></p></div>
     <div class="card"><h3>Node, not Deno <span class="tag">reversed D7</span></h3><p>To embed in a Node/Next.js server. Hono made the HTTP layer port cleanly.</p></div>
     <div class="card"><h3>Embeddable + standalone <span class="tag">reversed D6</span></h3><p>One Hono app; <code>createServer()</code> returns <code>app.fetch</code> to mount anywhere.</p></div>
     <div class="card"><h3>Debug = polling, not SSE <span class="tag">changed</span></h3><p>Cursor pagination over <code>/debug/events</code> — serverless-friendly, durable via Postgres.</p></div>
-    <div class="card"><h3>In-repo migration runner <span class="tag">reversed</span></h3><p>Inlined ordered migrations, own ledger in a dedicated schema, advisory-locked. <span class="file">D12</span></p></div>
+    <div class="card"><h3>In-repo migration runner <span class="tag">reversed</span></h3><p>Inlined ordered migrations, own ledger in a dedicated schema, advisory-locked. Rewrite-in-place vs forward-only governed by a high-water mark. <span class="file">D12 · MIGRATIONS.md</span></p></div>
   </div>
 </section>
 
@@ -387,7 +389,8 @@ GET /debug/events?after=47&amp;traceId=tr_…
 
 <footer>
   conversation-proxy · architecture overview · generated for the v1 Node build (text-only core)<br>
-  See <code>spec-files/CONVERSATION_PROXY_HANDOFF.md</code>, <code>docs/DECISIONS.md</code>, and <code>docs/NOT_DONE.md</code>.
+  See <code>docs/DESIGN.md</code> (decisions D1–D17), <code>docs/DECISIONS.md</code>,
+  <code>docs/MIGRATIONS.md</code>, and <code>docs/NOT_DONE.md</code>.
 </footer>
 
 </div>

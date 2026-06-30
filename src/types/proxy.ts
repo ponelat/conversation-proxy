@@ -1,6 +1,6 @@
 // The LLM proxy, provider boundary, and telemetry envelope (CallRecord).
 
-import type { AssembledMessage, ConversationId, ConversationScope } from "./core";
+import type { AssembledMessage, ConversationScope } from "./core";
 import type { CacheBreakpoint, PreparedContext } from "./agent";
 import type { DebugStage } from "./debug";
 
@@ -24,7 +24,6 @@ export interface LLMResponse {
 
 export interface CallContext {
   agent: string; // which agent served this call (D15)
-  conversationId?: ConversationId; // absent for non-persisting agents
   scope: ConversationScope;
   traceId: string;
 }
@@ -46,7 +45,6 @@ export interface LLMProxy {
 export interface CallRecord {
   traceId: string;
   agent: string;
-  conversationId?: ConversationId;
   scope: ConversationScope;
   systemPrompt: string;
   requestMessages: AssembledMessage[]; // exact context sent (enveloped, D16)
@@ -61,8 +59,8 @@ export interface CallRecord {
 
 export interface CallRecordFilter {
   agent?: string;
-  scopePrefix?: ConversationScope; // match records whose scope starts with this prefix
-  conversationId?: ConversationId;
+  scope?: ConversationScope; // match records for this exact scope (one conversation)
+  scopePrefix?: ConversationScope; // match records at or under this scope prefix
   model?: string;
   since?: string;
   until?: string;

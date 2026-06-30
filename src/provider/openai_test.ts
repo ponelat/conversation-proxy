@@ -4,7 +4,7 @@ import { assembledFromParts, systemNote } from "@/assembler/parts";
 import { textContent } from "@/types/index";
 import type { CallContext, LLMRequest } from "@/types/index";
 
-const ctx: CallContext = { agent: "default", scope: ["u"], traceId: "tr" };
+const ctx: CallContext = { agent: "default", scope: "u", traceId: "tr" };
 
 test("maps prepared context to chat messages and parses usage", async () => {
   const original = globalThis.fetch;

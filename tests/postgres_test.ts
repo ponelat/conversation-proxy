@@ -60,36 +60,30 @@ test.skipIf(!RUN)(
 
     const app = await buildApp(pgConfig());
     const root = crypto.randomUUID();
-    const scope = [`user_${root}`, "client_1"];
+    const scope = `user_${root}/client_1`;
 
     try {
       // facade → real PG persistence
       const res = await app.facade.send({ agent: "vet", scope, input: textContent("hello pg") });
-      assert(res.conversationId, "conversationId returned");
       assert(res.reply.includes("hello pg"));
 
-      const conv = await app.store.getConversation(res.conversationId!);
+      // the scope IS the conversation id — addressable directly
+      const conv = await app.store.getConversation(scope);
       assertEquals(conv?.messages.map((m) => m.role), ["user", "assistant"]);
 
-      // exact + prefix scope queries
-      assertEquals((await app.store.listConversations(scope)).length, 1);
-      assertEquals((await app.store.listConversationsByPrefix([`user_${root}`])).length, 1);
+      // boundary-aware prefix query
+      assertEquals((await app.store.listConversationsByPrefix(`user_${root}`)).length, 1);
 
       // telemetry envelope round-trips and filters
       const rec = await app.records.get(res.traceId);
       assertEquals(rec?.agent, "vet");
-      const metas = await app.records.query({ scopePrefix: [`user_${root}`] });
+      const metas = await app.records.query({ scopePrefix: `user_${root}` });
       assertEquals(metas.length, 1);
       assertEquals(metas[0].traceId, res.traceId);
 
-      // getMessages limit returns the most recent in chronological order
-      await app.facade.send({
-        agent: "vet",
-        scope,
-        conversationId: res.conversationId,
-        input: textContent("second turn"),
-      });
-      const recent = await app.store.getMessages(res.conversationId!, { limit: 2 });
+      // a second turn on the same scope accrues history automatically
+      await app.facade.send({ agent: "vet", scope, input: textContent("second turn") });
+      const recent = await app.store.getMessages(scope, { limit: 2 });
       assertEquals(recent.length, 2);
 
       // durable debug event log (fire-and-forget inserts → poll with retry)

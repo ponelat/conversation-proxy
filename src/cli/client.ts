@@ -82,28 +82,17 @@ export class ConversationProxyClient {
     return this.#req("/agents");
   }
 
-  createConversation(
-    scope: ConversationScope,
-    meta?: Partial<ConversationMeta>,
-  ): Promise<ConversationMeta> {
-    return this.#req("/conversations", { method: "POST", body: JSON.stringify({ scope, meta }) });
-  }
-
-  listConversations(scope: ConversationScope): Promise<ConversationMeta[]> {
+  /** Fetch the conversation for a scope (the scope IS the id, D2). */
+  getConversation(scope: ConversationScope): Promise<Conversation> {
     return this.#req("/conversations", { query: { scope: encodeScope(scope) } });
-  }
-
-  getConversation(id: string): Promise<Conversation> {
-    return this.#req(`/conversations/${encodeURIComponent(id)}`);
   }
 
   previewContext(
     agent: string,
     scope: ConversationScope,
-    conversationId?: string,
   ): Promise<AssembledContext> {
     return this.#req(`/agents/${encodeURIComponent(agent)}/context`, {
-      query: { scope: encodeScope(scope), conversationId },
+      query: { scope: encodeScope(scope) },
     });
   }
 
@@ -115,8 +104,8 @@ export class ConversationProxyClient {
     return this.#req("/records", {
       query: {
         agent: filter.agent,
+        scope: filter.scope ? encodeScope(filter.scope) : undefined,
         scopePrefix: filter.scopePrefix ? encodeScope(filter.scopePrefix) : undefined,
-        conversationId: filter.conversationId,
         model: filter.model,
         since: filter.since,
         until: filter.until,

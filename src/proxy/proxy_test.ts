@@ -25,8 +25,7 @@ const req = (): LLMRequest => ({
 
 const ctx = (): CallContext => ({
   agent: "default",
-  scope: ["user_1", "client_1"],
-  conversationId: "conv_1",
+  scope: "user_1/client_1",
   traceId: "tr_test",
 });
 
@@ -43,8 +42,7 @@ test("successful call writes a correct CallRecord and emits request→response",
   const rec = await records.get("tr_test");
   assert(rec, "record written");
   assertEquals(rec!.agent, "default");
-  assertEquals(rec!.scope, ["user_1", "client_1"]);
-  assertEquals(rec!.conversationId, "conv_1");
+  assertEquals(rec!.scope, "user_1/client_1");
   assertEquals(rec!.model, "test-model");
   assertEquals(rec!.systemPrompt, "be brief");
   assertEquals(rec!.error, undefined);
@@ -77,10 +75,10 @@ test("failed call emits error, writes an error envelope, and rethrows", async ()
 test("query filters records by scope prefix and agent", async () => {
   const records = new InMemoryCallRecordStore();
   const proxy = new ObservableLLMProxy(new FakeProvider(), new RecordingChannel(), records);
-  await proxy.complete(req(), { ...ctx(), traceId: "tr_a", scope: ["user_1", "client_1"] });
-  await proxy.complete(req(), { ...ctx(), traceId: "tr_b", scope: ["user_2", "client_9"] });
+  await proxy.complete(req(), { ...ctx(), traceId: "tr_a", scope: "user_1/client_1" });
+  await proxy.complete(req(), { ...ctx(), traceId: "tr_b", scope: "user_2/client_9" });
 
-  const underUser1 = await records.query({ scopePrefix: ["user_1"] });
+  const underUser1 = await records.query({ scopePrefix: "user_1" });
   assertEquals(underUser1.length, 1);
   assertEquals(underUser1[0].traceId, "tr_a");
 
