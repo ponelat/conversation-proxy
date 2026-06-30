@@ -53,7 +53,7 @@ npm run serve                     # http://localhost:8787  (or: npx tsx src/main
 | `agents` | yes | JSON: `[{name, persists}]` |
 | `send --agent <a> --scope a/b/c --input "..."` | yes | reply on **stdout**; `traceId`/usage on **stderr** |
 | `preview --agent <a> --scope a/b/c` | yes | JSON `AssembledContext` (no LLM call) |
-| `record <traceId>` | yes | JSON `CallRecord` (the full envelope sent) |
+| `record [<traceId>] [--scope a/b/c]` | yes | JSON `CallRecord` (full envelope). With `--scope` and no id, resolves the scope's **latest** trace |
 | `records --scope a/b/c [--agent <a>]` | yes | JSON `CallRecordMeta[]` — a scope's traces (most-recent first), each with its `traceId` |
 | `explore --scope a/b/c` | yes (debug enabled) | JSON `{conversations, records}` |
 | `stream [--trace <id>] [--agent <a>] [--types a,b]` | yes (debug enabled) | tails debug events (polls; Ctrl-C to stop) |
@@ -95,15 +95,16 @@ To start a **fresh** thread under the same identity, append a unique segment
 ### Inspect what was / would be sent
 
 ```sh
-npx tsx src/main.ts records --scope u/c                    # all traces for a scope (no traceId needed)
+npx tsx src/main.ts record --scope u/c                     # full envelope of the scope's LATEST call (no traceId needed)
+npx tsx src/main.ts records --scope u/c                    # all traces for a scope, most-recent first
 npx tsx src/main.ts record <traceId>                       # exact context + usage + latency for one call
 npx tsx src/main.ts preview --agent vet --scope u/c        # what WOULD be assembled, no LLM call
 ```
 
-`records --scope` is the "I have a scope, not a trace id" entry point: it lists the
-conversation's call records most-recent first, each with its `traceId` — pull the
-id from there into `record <traceId>` for the full envelope. Add `--agent` to
-narrow. (Matches the exact scope, not its `/<uuid>` branches.)
+The "I have a scope, not a trace id" path: `record --scope u/c` jumps straight to
+the conversation's **latest** envelope (it prints the chosen `traceId` to stderr),
+while `records --scope u/c` lists them all so you can pick an earlier one to feed
+into `record <traceId>`. Both match the exact scope, not its `/<uuid>` branches.
 
 ### Watch / poll debug events
 
