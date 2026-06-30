@@ -39,14 +39,14 @@ test("persisting agent stores both turns and emits all five events in order", as
   const { facade, store, debug } = wire();
   const res = await facade.send({
     agent: "default",
-    scope: ["user_1", "client_1"],
+    scope: "user_1/client_1",
     input: textContent("Bella is vomiting"),
   });
 
-  assert(res.conversationId, "conversationId returned for persisting agent");
   assert(res.reply.includes("Bella is vomiting"));
 
-  const msgs = await store.getMessages(res.conversationId!);
+  // The scope IS the conversation id — history is addressable by scope directly.
+  const msgs = await store.getMessages("user_1/client_1");
   assertEquals(msgs.map((m) => m.role), ["user", "assistant"]);
 
   assertEquals(debug.events.map((e) => e.type), [
@@ -60,42 +60,42 @@ test("persisting agent stores both turns and emits all five events in order", as
   assert(debug.events.every((e) => e.traceId === res.traceId));
 });
 
-test("multi-turn appends history under the same conversation", async () => {
+test("multi-turn accrues history under the same scope automatically", async () => {
   const { facade, store } = wire();
-  const first = await facade.send({
-    agent: "default",
-    scope: ["u"],
-    input: textContent("turn one"),
-  });
-  await facade.send({
-    agent: "default",
-    scope: ["u"],
-    conversationId: first.conversationId,
-    input: textContent("turn two"),
-  });
-  const msgs = await store.getMessages(first.conversationId!);
+  // No conversationId threading: re-using the scope continues the conversation.
+  await facade.send({ agent: "default", scope: "u", input: textContent("turn one") });
+  await facade.send({ agent: "default", scope: "u", input: textContent("turn two") });
+  const msgs = await store.getMessages("u");
   assertEquals(msgs.length, 4);
 });
 
-test("persist:false utility stores nothing and returns no conversationId", async () => {
+test("persist:false utility stores nothing", async () => {
   const { facade, store, records } = wire();
   const res = await facade.send({
     agent: "summarize",
-    scope: ["user_1"],
+    scope: "user_1",
     input: textContent("summarize this"),
   });
-  assertEquals(res.conversationId, undefined);
-  assertEquals((await store.listConversations(["user_1"])).length, 0);
+  assertEquals(await store.getConversation("user_1"), null);
   // observability still happens: a CallRecord exists
   const rec = await records.get(res.traceId);
   assert(rec, "utility agents still produce a CallRecord");
-  assertEquals(rec!.conversationId, undefined);
+});
+
+test("malformed scope with an empty segment is rejected", async () => {
+  const { facade } = wire();
+  // A missing id between separators ("a//c") is a client bug — surface it, not store it.
+  await assertRejects(
+    () => facade.send({ agent: "default", scope: "a//c", input: textContent("hi") }),
+    Error,
+    "empty segment",
+  );
 });
 
 test("unknown agent throws NotFound", async () => {
   const { facade } = wire();
   await assertRejects(
-    () => facade.send({ agent: "ghost", scope: ["u"], input: textContent("hi") }),
+    () => facade.send({ agent: "ghost", scope: "u", input: textContent("hi") }),
     Error,
     "unknown agent: ghost",
   );

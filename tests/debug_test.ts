@@ -9,7 +9,7 @@ import type { Config } from "@/config";
 import type { DebugEvent } from "@/types/index";
 
 function ev(traceId: string, type: DebugEvent["type"] = "request.received", agent = "vet"): DebugEvent {
-  return { type, traceId, agent, scope: [], ts: new Date().toISOString() } as DebugEvent;
+  return { type, traceId, agent, scope: "u", ts: new Date().toISOString() } as DebugEvent;
 }
 
 function startServer(
