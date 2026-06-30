@@ -1,14 +1,13 @@
 # What was NOT done in v1
 
-A deliberately complete, honest inventory of everything in the design
-([`spec-files/`](../spec-files)) and the build plan that v1 does **not** include —
-plus the caveats on what it does include. v1's mandate was a *lean, observable,
-reliable core* with "avoid extra features," so most of this is intentional
-scope-cutting, not oversight. See [`DECISIONS.md`](./DECISIONS.md) for the
-positive list of what shipped.
+A deliberately complete, honest inventory of the design and build plan that v1
+does **not** include — plus the caveats on what it does include. v1's mandate was
+a *lean, observable, reliable core* with "avoid extra features," so most of this
+is intentional scope-cutting, not oversight. See [`DECISIONS.md`](./DECISIONS.md)
+for the positive list of what shipped.
 
 Legend: **D#/Q#** reference the firm decisions / open questions in
-[`CONVERSATION_PROXY_HANDOFF.md`](../spec-files/CONVERSATION_PROXY_HANDOFF.md).
+[`DESIGN.md`](./DESIGN.md).
 
 ---
 

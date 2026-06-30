@@ -2,8 +2,7 @@
 
 This file records what the **v1 lean core** includes, what it defers, and the concrete technology
 choices — layered on top of the firm architectural decisions (D1–D17) in
-[`../spec-files/CONVERSATION_PROXY_HANDOFF.md`](../spec-files/CONVERSATION_PROXY_HANDOFF.md). The
-spec is the _why_; this file is the _what, for v1_.
+[`DESIGN.md`](./DESIGN.md). `DESIGN.md` is the _why_; this file is the _what, for v1_.
 
 ## Guiding priorities
 

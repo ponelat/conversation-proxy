@@ -12,8 +12,9 @@ either way.
 
 > Status: **v1 — lean text-only core** on Node.js (TypeScript). Multimodal/blobs,
 > an extra-context store, an SDK, and a web UI are designed but deferred. See
-> [`spec-files/`](./spec-files) for the full design, [`docs/DECISIONS.md`](./docs/DECISIONS.md)
-> for what's in v1 and why, and [`docs/NOT_DONE.md`](./docs/NOT_DONE.md) for what isn't.
+> [`docs/DESIGN.md`](./docs/DESIGN.md) for the architecture decisions (D1–D17),
+> [`docs/DECISIONS.md`](./docs/DECISIONS.md) for what's in v1 and why, and
+> [`docs/NOT_DONE.md`](./docs/NOT_DONE.md) for what isn't.
 
 ## What it does
 
@@ -139,7 +140,7 @@ events, including the common gotchas.
 ## Design
 
 The architecture and the rationale behind every firm decision (D1–D17) live in
-[`spec-files/CONVERSATION_PROXY_HANDOFF.md`](./spec-files/CONVERSATION_PROXY_HANDOFF.md).
+[`docs/DESIGN.md`](./docs/DESIGN.md).
 [`docs/DECISIONS.md`](./docs/DECISIONS.md) records what made it into v1 (including
 the Node runtime and the embed model); [`docs/NOT_DONE.md`](./docs/NOT_DONE.md) is
 the honest inventory of what was left out and the caveats on what shipped.
