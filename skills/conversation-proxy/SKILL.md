@@ -53,7 +53,7 @@ npm run serve                     # http://localhost:8787  (or: npx tsx src/main
 | `agents` | yes | JSON: `[{name, persists}]` |
 | `send --agent <a> --scope a/b/c --input "..."` | yes | reply on **stdout**; `traceId`/usage on **stderr** |
 | `preview --agent <a> --scope a/b/c` | yes | JSON `AssembledContext` (no LLM call) |
-| `record [<traceId>] [--scope a/b/c]` | yes | JSON `CallRecord` (full envelope). With `--scope` and no id, resolves the scope's **latest** trace |
+| `record [<traceId>] [--scope a/b/c] [--agent <a>]` | yes | JSON `CallRecord` (full envelope). With `--scope` and no id, resolves the **latest** trace for that scope (and `--agent`, if given) |
 | `records --scope a/b/c [--agent <a>]` | yes | JSON `CallRecordMeta[]` — a scope's traces (most-recent first), each with its `traceId` |
 | `explore --scope a/b/c` | yes (debug enabled) | JSON `{conversations, records}` |
 | `stream [--trace <id>] [--agent <a>] [--types a,b]` | yes (debug enabled) | tails debug events (polls; Ctrl-C to stop) |
@@ -104,7 +104,9 @@ npx tsx src/main.ts preview --agent vet --scope u/c        # what WOULD be assem
 The "I have a scope, not a trace id" path: `record --scope u/c` jumps straight to
 the conversation's **latest** envelope (it prints the chosen `traceId` to stderr),
 while `records --scope u/c` lists them all so you can pick an earlier one to feed
-into `record <traceId>`. Both match the exact scope, not its `/<uuid>` branches.
+into `record <traceId>`. Add `--agent <a>` to either to narrow to one agent's
+calls (e.g. the latest `vet` trace on a scope). Both match the exact scope, not
+its `/<uuid>` branches.
 
 ### Watch / poll debug events
 
