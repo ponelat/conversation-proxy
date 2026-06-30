@@ -1,0 +1,2774 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RFC · Conversation Proxy &amp; Observability Module</title>
+    <style>
+      /* ============================================================
+         Design tokens
+         Palette — "drafting table": ink navy on warm paper, one signal accent.
+           --ink      deep navy-black, primary text + structure
+           --paper    warm off-white ground
+           --paper-2  slightly deeper panel ground
+           --line     hairline rule (blueprint graphite)
+           --signal   the single accent: a saturated signal-blue, used for the
+                      live data-flow + active states ONLY
+           --amber    secondary marker for "deferred / open" states
+           --moss     secondary marker for "firm / settled" states
+         ============================================================ */
+      :root {
+        --ink: #15202b;
+        --ink-soft: #3a4a59;
+        --paper: #f6f3ec;
+        --paper-2: #efe9dd;
+        --panel: #fbf9f4;
+        --line: #cdc4b2;
+        --line-strong: #9a8f78;
+        --signal: #1f6feb;
+        --signal-deep: #0b3d91;
+        --amber: #b06a12;
+        --moss: #3f6f47;
+        --code-bg: #11202e;
+        --code-fg: #dfe7ee;
+        --code-dim: #8aa0b3;
+        --code-key: #7fc6ff;
+        --code-str: #c5e1a5;
+        --code-com: #5f7689;
+        --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --sans: "Söhne","Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+        --maxw: 1180px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+          scroll-behavior: auto !important;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 16px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      /* faint engineering grid behind everything */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(var(--line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line) 1px, transparent 1px);
+        background-size: 32px 32px;
+        opacity: 0.16;
+        mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 75%);
+      }
+      a {
+        color: var(--signal-deep);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* ---- type scale ---- */
+      h1, h2, h3, h4 {
+        line-height: 1.12;
+        letter-spacing: -0.02em;
+        font-weight: 650;
+      }
+      .eyebrow {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        font-weight: 500;
+      }
+
+      /* ============================================================ layout */
+      .wrap {
+        position: relative;
+        z-index: 1;
+        max-width: var(--maxw);
+        margin: 0 auto;
+        padding: 0 28px;
+      }
+      header.masthead {
+        padding: 54px 0 30px;
+        border-bottom: 2px solid var(--ink);
+      }
+      .stamp {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--signal-deep);
+        border: 1px solid var(--signal);
+        border-radius: 2px;
+        padding: 5px 10px;
+        background: rgba(31, 111, 235, 0.06);
+      }
+      .stamp .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--signal);
+        box-shadow: 0 0 0 0 rgba(31, 111, 235, 0.5);
+        animation: pulse 2.6s ease-out infinite;
+      }
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(31, 111, 235, 0.45);
+        }
+        70% {
+          box-shadow: 0 0 0 7px rgba(31, 111, 235, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(31, 111, 235, 0);
+        }
+      }
+      h1.title {
+        font-size: clamp(2.1rem, 5.4vw, 3.6rem);
+        margin: 0.5em 0 0.26em;
+        max-width: 18ch;
+      }
+      h1.title em {
+        font-style: normal;
+        color: var(--signal-deep);
+      }
+      .dek {
+        font-size: clamp(1.02rem, 2vw, 1.22rem);
+        color: var(--ink-soft);
+        max-width: 62ch;
+        margin: 0;
+      }
+      .meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+        margin-top: 26px;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--ink-soft);
+      }
+      .meta-row b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      /* ============================================================ pipeline signature */
+      .pipeline-shell {
+        margin: 30px 0 6px;
+        border: 1px solid var(--line-strong);
+        background: linear-gradient(180deg, var(--panel), var(--paper-2));
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .pipeline-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+      }
+      .pipeline-head button {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        background: var(--ink);
+        color: var(--paper);
+        border: 0;
+        padding: 6px 12px;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .pipeline-head button:hover {
+        background: var(--signal-deep);
+      }
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 0;
+        padding: 22px 14px 26px;
+      }
+      .node {
+        position: relative;
+        text-align: center;
+        padding: 0 8px;
+      }
+      .node .chip {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: center;
+        justify-content: center;
+        border: 1.5px solid var(--line-strong);
+        background: var(--panel);
+        border-radius: 6px;
+        padding: 14px 6px;
+        min-height: 88px;
+        transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+      }
+      .node .k {
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        letter-spacing: 0.1em;
+        color: var(--ink-soft);
+        text-transform: uppercase;
+      }
+      .node .lab {
+        font-weight: 600;
+        font-size: 0.92rem;
+      }
+      .node .sub {
+        font-size: 0.72rem;
+        color: var(--ink-soft);
+      }
+      .node::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -2px;
+        width: 18px;
+        height: 2px;
+        background: var(--line-strong);
+        transform: translateY(-1px);
+      }
+      .node:last-child::after {
+        display: none;
+      }
+      .node.lit .chip {
+        border-color: var(--signal);
+        background: #fff;
+        box-shadow: 0 4px 18px -8px rgba(31, 111, 235, 0.6);
+      }
+      .node.lit .k {
+        color: var(--signal-deep);
+      }
+      .flow-meta {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 18px 16px;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--ink-soft);
+      }
+      .flow-meta .tag {
+        padding: 2px 8px;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+      }
+
+      /* ============================================================ nav */
+      nav.toc {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: rgba(246, 243, 236, 0.86);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line);
+        margin-top: 8px;
+      }
+      nav.toc ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px;
+        list-style: none;
+        margin: 0;
+        padding: 8px 0;
+        max-width: var(--maxw);
+        margin-inline: auto;
+        padding-inline: 28px;
+      }
+      nav.toc a {
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        letter-spacing: 0.04em;
+        color: var(--ink-soft);
+        padding: 6px 11px;
+        border-radius: 3px;
+      }
+      nav.toc a:hover {
+        background: var(--paper-2);
+        text-decoration: none;
+        color: var(--ink);
+      }
+      nav.toc a.active {
+        background: var(--ink);
+        color: var(--paper);
+      }
+
+      /* ============================================================ sections */
+      section {
+        padding: 58px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .sec-head {
+        display: flex;
+        gap: 16px;
+        align-items: baseline;
+        margin-bottom: 8px;
+      }
+      .sec-num {
+        font-family: var(--mono);
+        font-size: 0.86rem;
+        color: var(--signal-deep);
+        font-weight: 600;
+        border: 1px solid var(--signal);
+        border-radius: 3px;
+        padding: 2px 8px;
+        flex: none;
+      }
+      h2 {
+        font-size: clamp(1.5rem, 3vw, 2.05rem);
+        margin: 0;
+      }
+      .lede {
+        font-size: 1.08rem;
+        color: var(--ink-soft);
+        max-width: 70ch;
+        margin: 0.5em 0 1.6em;
+      }
+
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 22px;
+      }
+      .grid3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+      }
+      @media (max-width: 860px) {
+        .grid2, .grid3, .flow {
+          grid-template-columns: 1fr;
+        }
+        .node::after {
+          display: none;
+        }
+        .node .chip {
+          min-height: 0;
+        }
+      }
+
+      /* card */
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 20px 22px;
+      }
+      .card h4 {
+        margin: 0.1em 0 0.4em;
+        font-size: 1.05rem;
+      }
+      .card p {
+        margin: 0.3em 0;
+        font-size: 0.95rem;
+        color: var(--ink-soft);
+      }
+      .card .role {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--signal-deep);
+      }
+
+      /* decision register */
+      .dl {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+      .drow {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 0;
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .drow:first-child {
+        border-top: 0;
+      }
+      .drow.open-row {
+        cursor: pointer;
+      }
+      .did {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--paper);
+        background: var(--ink);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.92rem;
+        letter-spacing: 0.04em;
+      }
+      .drow[data-kind="defer"] .did {
+        background: var(--amber);
+      }
+      .dbody {
+        padding: 15px 18px;
+      }
+      .dbody .dt {
+        font-weight: 600;
+        margin: 0 0 3px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .dbody .why {
+        font-size: 0.92rem;
+        color: var(--ink-soft);
+        margin: 0;
+        display: none;
+      }
+      .drow.expanded .why {
+        display: block;
+        margin-top: 8px;
+      }
+      .pill {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 2px 7px;
+        border-radius: 99px;
+        border: 1px solid currentColor;
+      }
+      .pill.firm {
+        color: var(--moss);
+      }
+      .pill.defer {
+        color: var(--amber);
+      }
+      .chev {
+        margin-left: auto;
+        font-family: var(--mono);
+        color: var(--ink-soft);
+        transition: transform 0.2s;
+      }
+      .drow.expanded .chev {
+        transform: rotate(90deg);
+      }
+
+      /* code panes */
+      .code {
+        background: var(--code-bg);
+        color: var(--code-fg);
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid #0a151e;
+        margin: 0;
+      }
+      .code-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        background: #0d1924;
+        border-bottom: 1px solid #0a151e;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--code-dim);
+      }
+      .code-bar .fname {
+        color: var(--code-fg);
+      }
+      .code-bar .src {
+        margin-left: auto;
+        font-size: 0.66rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .code pre {
+        margin: 0;
+        padding: 16px 16px 18px;
+        overflow: auto;
+        font-family: var(--mono);
+        font-size: 0.82rem;
+        line-height: 1.62;
+        tab-size: 2;
+      }
+      .code pre code {
+        white-space: pre;
+      }
+      /* token coloring (applied via spans we emit) */
+      .t-key {
+        color: var(--code-key);
+      }
+      .t-str {
+        color: var(--code-str);
+      }
+      .t-com {
+        color: var(--code-com);
+        font-style: italic;
+      }
+      .t-kw {
+        color: #ff9e64;
+      }
+      .t-typ {
+        color: #b8a2ff;
+      }
+
+      /* tabs */
+      .tabs {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+      .tab {
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        letter-spacing: 0.04em;
+        padding: 7px 13px;
+        border: 1px solid var(--line-strong);
+        background: var(--panel);
+        border-radius: 4px;
+        cursor: pointer;
+        color: var(--ink-soft);
+      }
+      .tab[aria-selected="true"] {
+        background: var(--ink);
+        color: var(--paper);
+        border-color: var(--ink);
+      }
+      .tabpane {
+        display: none;
+      }
+      .tabpane.show {
+        display: block;
+      }
+
+      details.spec {
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: var(--panel);
+        margin-top: 14px;
+        overflow: hidden;
+      }
+      details.spec > summary {
+        cursor: pointer;
+        padding: 13px 18px;
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        letter-spacing: 0.06em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        list-style: none;
+      }
+      details.spec > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.spec > summary .arrow {
+        transition: transform 0.2s;
+        color: var(--signal-deep);
+      }
+      details.spec[open] > summary .arrow {
+        transform: rotate(90deg);
+      }
+      details.spec > summary .count {
+        margin-left: auto;
+        color: var(--ink-soft);
+        font-size: 0.7rem;
+      }
+
+      /* workflow steps */
+      .steps {
+        counter-reset: step;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 42px 1fr;
+        gap: 16px;
+        padding: 14px 0;
+        border-top: 1px dashed var(--line);
+      }
+      .step:first-child {
+        border-top: 0;
+      }
+      .step .n {
+        counter-increment: step;
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--signal-deep);
+        border: 1px solid var(--signal);
+        border-radius: 50%;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85rem;
+      }
+      .step .n::before {
+        content: counter(step);
+      }
+      .step .sbody {
+        font-size: 0.95rem;
+      }
+      .step .sbody code {
+        font-family: var(--mono);
+        font-size: 0.84em;
+        background: var(--paper-2);
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+
+      /* callout */
+      .note {
+        border-left: 3px solid var(--signal);
+        background: rgba(31, 111, 235, 0.05);
+        padding: 14px 18px;
+        border-radius: 0 5px 5px 0;
+        font-size: 0.95rem;
+        margin: 18px 0;
+      }
+      .note.warn {
+        border-left-color: var(--amber);
+        background: rgba(176, 106, 18, 0.06);
+      }
+      .note .lbl {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--signal-deep);
+        display: block;
+        margin-bottom: 4px;
+      }
+      .note.warn .lbl {
+        color: var(--amber);
+      }
+
+      /* responsibility table */
+      .rtable {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+        border: 1px solid var(--line);
+      }
+      .rtable th, .rtable td {
+        text-align: left;
+        padding: 11px 13px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      .rtable th {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        background: var(--paper-2);
+      }
+      .rtable td:first-child {
+        font-family: var(--mono);
+        font-size: 0.84rem;
+        color: var(--signal-deep);
+        white-space: nowrap;
+      }
+      .rtable tr:last-child td {
+        border-bottom: 0;
+      }
+
+      /* tag chips for stability */
+      .stab {
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        letter-spacing: 0.06em;
+        padding: 2px 7px;
+        border-radius: 3px;
+        text-transform: uppercase;
+      }
+      .stab.static {
+        background: #dde9df;
+        color: var(--moss);
+      }
+      .stab.semi {
+        background: #f0e2cc;
+        color: var(--amber);
+      }
+      .stab.vol {
+        background: #dbe6f5;
+        color: var(--signal-deep);
+      }
+
+      /* RFC / comment section */
+      .rfc {
+        background: var(--ink);
+        color: var(--paper);
+        border-radius: 6px;
+        padding: 30px 28px;
+      }
+      .rfc h3 {
+        color: #fff;
+        margin: 0 0 6px;
+        font-size: 1.3rem;
+      }
+      .rfc p {
+        color: #c4cdd6;
+        max-width: 64ch;
+      }
+      .rfc .openq {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .oq {
+        display: grid;
+        grid-template-columns: 54px 1fr;
+        gap: 14px;
+        align-items: start;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 5px;
+        padding: 13px 15px;
+      }
+      .oq .qid {
+        font-family: var(--mono);
+        color: #ffd27f;
+        font-weight: 700;
+      }
+      .oq .qt {
+        font-size: 0.94rem;
+        color: #e6ebef;
+      }
+      .oq .qt span {
+        display: block;
+        color: #9aa7b2;
+        font-size: 0.82rem;
+        margin-top: 3px;
+      }
+
+      footer {
+        padding: 40px 0 70px;
+        color: var(--ink-soft);
+        font-family: var(--mono);
+        font-size: 0.76rem;
+      }
+      footer .files {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      footer .files span {
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 4px 9px;
+        background: var(--panel);
+      }
+
+      .kbd {
+        font-family: var(--mono);
+        font-size: 0.78em;
+        border: 1px solid var(--line-strong);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 1px 6px;
+        background: var(--panel);
+      }
+      .inline-mono {
+        font-family: var(--mono);
+        font-size: 0.86em;
+        background: var(--paper-2);
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <span class="stamp"><span class="dot"></span>Request for Comment · v0.1 · Pre-build</span>
+        <h1 class="title">Conversation Proxy &amp; <em>Observability</em> Module</h1>
+        <p class="dek">
+          A dedicated service that sits between a veterinary application and an LLM — owning
+          conversation persistence, composing context intentionally from the user → client → patient
+          hierarchy, controlling prompt caching, and emitting enough observability to inspect,
+          replay, and evaluate exactly what was sent to the model.
+        </p>
+        <div class="meta-row">
+          <span><b>Status</b> · Design complete · ready to implement</span>
+          <span><b>Runtime</b> · Deno / TypeScript</span>
+          <span><b>Audience</b> · Engineers &amp; reviewers</span>
+          <span><b>Decisions</b> · 17 firm · 7 open</span>
+        </div>
+
+        <!-- SIGNATURE: live request pipeline -->
+        <div class="pipeline-shell" id="pipeline">
+          <div class="pipeline-head">
+            <span>send() · request lifecycle</span>
+            <button id="runFlow" type="button">▶ Trace a request</button>
+          </div>
+          <div class="flow">
+            <div class="node" data-stage="assemble">
+              <div class="chip">
+                <span class="k">01 · store</span><span class="lab">Persist turn</span><span
+                  class="sub"
+                >append user message</span>
+              </div>
+            </div>
+            <div class="node" data-stage="assemble">
+              <div class="chip">
+                <span class="k">02 · assembler</span><span class="lab">Assemble</span><span
+                  class="sub"
+                >stability-tagged segments</span>
+              </div>
+            </div>
+            <div class="node" data-stage="cache">
+              <div class="chip">
+                <span class="k">03 · cache</span><span class="lab">Prepare</span><span class="sub"
+                >passthrough · prefix 0</span>
+              </div>
+            </div>
+            <div class="node" data-stage="llm">
+              <div class="chip">
+                <span class="k">04 · proxy</span><span class="lab">Call LLM</span><span class="sub"
+                >emit + record envelope</span>
+              </div>
+            </div>
+            <div class="node" data-stage="persist">
+              <div class="chip">
+                <span class="k">05 · store</span><span class="lab">Persist reply</span><span
+                  class="sub"
+                >append assistant message</span>
+              </div>
+            </div>
+          </div>
+          <div class="flow-meta">
+            <span class="tag">control plane → REST</span>
+            <span class="tag" id="flowStatus">idle</span>
+            <span class="tag">debug plane → SSE events</span>
+          </div>
+        </div>
+      </header>
+    </div>
+
+    <nav class="toc">
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#decisions">Decisions</a></li>
+        <li><a href="#layers">Layers</a></li>
+        <li><a href="#interfaces">Interfaces</a></li>
+        <li><a href="#assembler">Assembler hook</a></li>
+        <li><a href="#contracts">API contracts</a></li>
+        <li><a href="#workflows">Workflows</a></li>
+        <li><a href="#build">Build order</a></li>
+        <li><a href="#rfc">Open questions</a></li>
+      </ul>
+    </nav>
+
+    <div class="wrap">
+      <!-- OVERVIEW -->
+      <section id="overview">
+        <div class="sec-head">
+          <span class="sec-num">00</span><h2>What this is, and why it's shaped this way</h2>
+        </div>
+        <p class="lede">
+          LLMs are stateless: every call must carry the full context. A “session” is therefore
+          something this service maintains, not something the model holds. The whole design follows
+          from one move — splitting that responsibility into parts that each change for a different
+          reason, then exposing them behind a single front door.
+        </p>
+        <div class="grid3">
+          <div class="card">
+            <span class="role">The problem</span><h4>Context is the product</h4>
+            <p>
+              What gets sent to the model — the system prompt, the patient record, the conversation
+              so far — is the lever for both quality and cost. It must be deliberate, inspectable,
+              and replayable.
+            </p>
+          </div>
+          <div class="card">
+            <span class="role">The shape</span><h4>Three layers + a proxy</h4>
+            <p>
+              A store (persistence), an assembler (composition), a cache strategy (vendor
+              mechanics), and a proxy (the model call + telemetry). Independent, swappable,
+              individually testable.
+            </p>
+          </div>
+          <div class="card">
+            <span class="role">The front door</span><h4>One agent interface</h4>
+            <p>
+              The app calls <span class="inline-mono">ConversationAgent.send()</span>. Even as a
+              one-shot, it is a real agent: persistent state, a managed context window, a controlled
+              model interface.
+            </p>
+          </div>
+        </div>
+        <div class="note">
+          <span class="lbl">Domain</span>The first consumer is a veterinary application with the
+          hierarchy <b>user → client → patient → conversation</b>. But the server stores scope as a
+          <b>generic ordered array</b> — <span class="inline-mono"
+          >["user_42","client_88","patient_3","2026-W26"]</span> — and attaches no meaning to any
+          level. Another consumer could use <span class="inline-mono"
+          >["org","team","thread"]</span>. New levels are just longer arrays.
+        </div>
+      </section>
+
+      <!-- DECISIONS -->
+      <section id="decisions">
+        <div class="sec-head"><span class="sec-num">01</span><h2>Decision register</h2></div>
+        <p class="lede">
+          Every firm choice, recorded with its rationale so it isn't accidentally relitigated. Tap
+          any row to read why. These are the heart of the RFC — if you disagree with one, this is
+          the place to say so.
+        </p>
+        <div class="dl">
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D1</div>
+            <div class="dbody">
+              <p class="dt">
+                Three separable layers, not one <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                Store, Assembler, CacheStrategy and the Proxy are independent interfaces wired
+                together — never merged. Each changes for a different reason. The litmus test used
+                throughout: “if I change how the patient record is cached, does the storage layer
+                change?” The answer must be no.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D2</div>
+            <div class="dbody">
+              <p class="dt">
+                Identity is a generic hierarchy array <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                Retrieval is listConversations(scope) where scope is an ordered array of opaque
+                string IDs — broadest first, leaf last, e.g.
+                ["user_42","client_88","patient_3","2026-W26"]. The server attaches no meaning to
+                any level; the vet domain is just one mapping. New levels are simply longer arrays,
+                and the order is what enables prefix-based extra-context lookup.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D3</div>
+            <div class="dbody">
+              <p class="dt">
+                The Assembler is a distinct third role <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                Context is composed from multiple sources, ordered most-stable-first. The assembler
+                knows the domain but is vendor-agnostic; the cache strategy knows the vendor but is
+                domain-agnostic. They communicate only through stability tags.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D4</div>
+            <div class="dbody">
+              <p class="dt">
+                Caching starts as a no-op, data-driven <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                The default cache strategy is passthrough: send everything, ignore caching.
+                cachedTokens is recorded anyway, so the team accumulates the data to decide when
+                prefix caching is worth enabling. Correctness first.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D5</div>
+            <div class="dbody">
+              <p class="dt">
+                A facade exposes a single interface <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                The application talks to one object, ConversationAgent.send(). It only orchestrates;
+                heavy logic is tested at the layer below, so its own test is small.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D6</div>
+            <div class="dbody">
+              <p class="dt">
+                Dedicated service, not embedded import <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                The realtime debug channel needs a long-lived process that holds streaming
+                connections. Serverless request handlers cannot be that. The layers become the
+                internals of this service.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D7</div>
+            <div class="dbody">
+              <p class="dt">
+                Deno (TypeScript), not Go <span class="pill firm">firm</span><span class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                The workload is I/O-bound, so Go's CPU/concurrency edge isn't perceptible. Deno
+                gives native TS with no build step, runtime dynamic import() for the optional hook,
+                and permission flags that bound the process. Revisit Go only on a profiled
+                bottleneck.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D8</div>
+            <div class="dbody">
+              <p class="dt">
+                REST + SSE, not gRPC <span class="pill firm">firm</span><span class="chev">▸</span>
+              </p>
+              <p class="why">
+                The debug consumer is a browser tool. gRPC streaming into a browser needs grpc-web +
+                a proxy. REST + SSE is far simpler for “a tool taps in and watches events flow.”
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D9</div>
+            <div class="dbody">
+              <p class="dt">
+                Two planes in one service <span class="pill firm">firm</span><span class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                A control/data plane (REST) and a debug plane (streaming + explorer). The debug
+                plane can be auth-gated, disabled in prod, and scaled independently so a slow
+                observer never backpressures a real request.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D10</div>
+            <div class="dbody">
+              <p class="dt">
+                Proxy emits events; channel is a subscriber <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                The proxy depends on a DebugChannel interface and calls emit(). It knows nothing
+                about SSE/WebSocket. Default is NullDebugChannel — zero overhead, no observers.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D11</div>
+            <div class="dbody">
+              <p class="dt">
+                Assembler is a single optional drop-in hook <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                One file at ./assembler/hook.ts exporting assemble. Loaded by dynamic import at
+                startup. Absent → default, server boots normally. Present but broken → fail loudly,
+                never a silent downgrade.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D12</div>
+            <div class="dbody">
+              <p class="dt">
+                Owns its tables; tracks its own migrations <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                Tables live in a dedicated Postgres schema; migration state is tracked in the
+                service's own ledger via a standard tool, isolated from other migration systems on a
+                shared DB. Default migrate command; --migrate-on-startup runs under an advisory
+                lock.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D13</div>
+            <div class="dbody">
+              <p class="dt">
+                Two machine-readable API contracts <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                OpenAPI 3.1 for the synchronous control plane, AsyncAPI 3.0 for the event-driven
+                debug plane. The SDK generates from / validates against both, so server and client
+                cannot drift.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D14</div>
+            <div class="dbody">
+              <p class="dt">
+                Scope-keyed extra-context store <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                A separate KV store keyed by scope holds arbitrary JSON: getExtraContext /
+                setExtraContext / clearExtraContext. Client code writes it out of band; the
+                assembler reads it to pull derived domain data (e.g. a patient's last SOAP note)
+                into context. Exact-match is the primitive; an opt-in prefix walk inherits from
+                ancestor levels. The server never interprets the JSON.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D15</div>
+            <div class="dbody">
+              <p class="dt">
+                One unified agent model; persistence is a hook <span class="pill firm"
+                >firm</span><span class="chev">▸</span>
+              </p>
+              <p class="why">
+                There is one kind of agent, defined by a single &lt;name&gt;.agent.ts manifest
+                (async factory). No conversational-vs-oneshot mode. An agent's persist field is a
+                function (custom), false (utility: no messages stored), or true/undefined (default).
+                A summarizer or transcriber is simply persist:false — it reads no history and writes
+                nothing, but its observability is identical. One front door (send), one CallRecord
+                shape, no branching.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D16</div>
+            <div class="dbody">
+              <p class="dt">
+                Normalized content; pristine persisted vs. enveloped assembled <span
+                  class="pill firm"
+                >firm</span><span class="chev">▸</span>
+              </p>
+              <p class="why">
+                Message content is a normalized array of parts (text/image/audio/file); non-text
+                parts are blob-only via sourceUri — never inline base64 at rest. The persisted
+                ContentPart/StoredMessage never carry transport metadata. The ephemeral
+                AssembledPart/AssembledMessage wrap the pristine part by value and add a meta
+                channel; the assembler sets meta.resolve to tell the resolver which parts to hydrate
+                to bytes. Default: current-turn media as bytes, history as refs. resolve:true parts
+                must live in a volatile segment.
+              </p>
+            </div>
+          </div>
+          <div class="drow open-row" data-kind="firm">
+            <div class="did">D17</div>
+            <div class="dbody">
+              <p class="dt">
+                Blob store with write-behind mint <span class="pill firm">firm</span><span
+                  class="chev"
+                >▸</span>
+              </p>
+              <p class="why">
+                Media lives in an S3-compatible blob store. mint() returns a UUID/ref synchronously
+                and uploads in the background, with bytes also held in an in-process pending buffer.
+                The resolver hydrates from the buffer first, so the LLM call never waits on S3
+                persistence. Stored messages and CallRecords keep only the ref; the debug UI
+                resolves refs to fetchable URLs, never inline bytes.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LAYERS -->
+      <section id="layers">
+        <div class="sec-head">
+          <span class="sec-num">02</span><h2>The layers, and what each is forbidden to know</h2>
+        </div>
+        <p class="lede">
+          The boundaries hold only because each component is kept ignorant of the others' concerns.
+          This table is the contract.
+        </p>
+        <table class="rtable">
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Knows about</th>
+              <th>Does not know about</th>
+              <th>Changes when</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ConversationStore</td>
+              <td>scope, messages, persistence</td>
+              <td>LLM, caching, ordering-for-cache</td>
+              <td>storage backend changes</td>
+            </tr>
+            <tr>
+              <td>ExtraContextStore</td>
+              <td>scope-keyed JSON blobs (opaque)</td>
+              <td>the meaning of the JSON, LLM, caching</td>
+              <td>new backend / lookup semantics</td>
+            </tr>
+            <tr>
+              <td>Agent registry</td>
+              <td>loaded agents by name, their hooks</td>
+              <td>how hooks are implemented</td>
+              <td>agents added/changed (restart)</td>
+            </tr>
+            <tr>
+              <td>BlobStore</td>
+              <td>media bytes, refs, write-behind upload</td>
+              <td>what the media means, the provider</td>
+              <td>blob backend changes</td>
+            </tr>
+            <tr>
+              <td>MediaResolver</td>
+              <td>vendor media encoding, bytes-vs-url</td>
+              <td>domain meaning, which parts to hydrate</td>
+              <td>provider/media-format changes</td>
+            </tr>
+            <tr>
+              <td>ContextAssembler (hook)</td>
+              <td>domain hierarchy, segment order, stability</td>
+              <td>vendor cache syntax, transport</td>
+              <td>composition rules change</td>
+            </tr>
+            <tr>
+              <td>CacheStrategy</td>
+              <td>vendor cache mechanics, breakpoints</td>
+              <td>domain meaning of segments</td>
+              <td>vendor caching changes</td>
+            </tr>
+            <tr>
+              <td>LLMProxy</td>
+              <td>provider SDKs, request/response, telemetry</td>
+              <td>your DB schema, domain</td>
+              <td>provider/telemetry changes</td>
+            </tr>
+            <tr>
+              <td>ConversationAgent</td>
+              <td>how to orchestrate the above</td>
+              <td>internals of each</td>
+              <td>orchestration steps change</td>
+            </tr>
+            <tr>
+              <td>DebugChannel</td>
+              <td>event fan-out</td>
+              <td>who produces events, transport detail</td>
+              <td>new transport added</td>
+            </tr>
+            <tr>
+              <td>ContextExplorer</td>
+              <td>reading store + assembler preview</td>
+              <td>writing, LLM calls</td>
+              <td>query needs change</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note" style="margin-top: 22px">
+          <span class="lbl">The litmus test (D1)</span>If a change to <em>how the patient record is
+            cached</em> forces a change in the <em>storage layer</em>, a boundary is in the wrong
+          place. Throughout the design, that test must come back “no”.
+        </div>
+      </section>
+
+      <!-- INTERFACES -->
+      <section id="interfaces">
+        <div class="sec-head"><span class="sec-num">03</span><h2>Interface contracts</h2></div>
+        <p class="lede">
+          The normative TypeScript. Names are firm; types may be refined in implementation as long
+          as the boundaries survive. Switch between them below.
+        </p>
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected="true" data-tab="i-scope">
+            Scope &amp; identity
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-agent">
+            Agent manifest
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-content">
+            Content parts
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-store">Store</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-extra">
+            Extra-context
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-blob">
+            Blob &amp; resolver
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-cache">
+            Cache strategy
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-proxy">
+            Proxy &amp; telemetry
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-debug">
+            Debug channel
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-facade">Facade</button>
+        </div>
+        <div class="tabpane show" id="i-scope">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/scope.ts</span><span class="src">handoff §4.1 · D2</span>
+            </figcaption>
+            <pre>
+<code><span class="t-com">// Ordered hierarchy of opaque IDs — broadest first, leaf last.</span>
+<span class="t-com">// The server attaches NO meaning to any level; the vet domain is just one mapping.</span>
+<span class="t-kw">type</span> <span class="t-typ">ConversationScope</span> = <span class="t-typ">string</span>[];
+<span class="t-com">//   e.g. ["user_42", "client_88", "patient_3", "2026-W26"]</span>
+<span class="t-com">//        another consumer might use ["org", "team", "thread"]</span>
+
+<span class="t-com">// Serializes to a stable storage key; SCOPE_SEP must not appear in any ID.</span>
+<span class="t-kw">const</span> SCOPE_SEP = "\u0000";
+<span class="t-kw">const</span> scopeKey = (s: <span class="t-typ">ConversationScope</span>) =&gt; s.join(SCOPE_SEP);</code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-agent">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">summarize.agent.ts</span><span class="src"
+              >handoff §4.3 · D11 / D15</span>
+            </figcaption>
+            <pre>
+<code><span class="t-com">// An agent is ONE file: &lt;name&gt;.agent.ts. Default export is an async factory</span>
+<span class="t-com">// returning a manifest. Filename = identity. Missing hooks use built-in defaults.</span>
+<span class="t-kw">interface</span> AgentManifest {
+  assemble?: <span class="t-typ">AssemblerHook</span>;              <span class="t-com">// omitted → default assembler</span>
+  cache?: <span class="t-typ">CacheStrategy</span>;                 <span class="t-com">// omitted → passthrough</span>
+  persist?: PersistenceHook | <span class="t-typ">boolean</span>;   <span class="t-com">// fn = custom · false = utility · true/undefined = default</span>
+}
+
+<span class="t-kw">type</span> AgentFactory = () =&gt; <span class="t-kw">Promise</span>&lt;AgentManifest&gt;;
+
+<span class="t-com">// Persistence is a hook, not a mode (D15). "One-shot" = persist:false.</span>
+<span class="t-kw">interface</span> PersistenceHook {
+  loadHistory(scope: <span class="t-typ">ConversationScope</span>, conversationId?: <span class="t-typ">ConversationId</span>): <span class="t-kw">Promise</span>&lt;<span class="t-typ">StoredMessage</span>[]&gt;;
+  persistTurn(scope: <span class="t-typ">ConversationScope</span>, conversationId: <span class="t-typ">ConversationId</span> | undefined,
+              user: <span class="t-typ">StoredMessage</span>, assistant: <span class="t-typ">StoredMessage</span>): <span class="t-kw">Promise</span>&lt;<span class="t-typ">void</span>&gt;;
+}
+
+<span class="t-com">// --- a one-shot utility agent: summarize.agent.ts -------------------------</span>
+<span class="t-kw">export</span> default <span class="t-kw">async</span> <span class="t-kw">function</span> (): <span class="t-kw">Promise</span>&lt;AgentManifest&gt; {
+  <span class="t-kw">return</span> {
+    persist: false,                      <span class="t-com">// never stores messages; still fully observable</span>
+    <span class="t-kw">async</span> assemble({ message }) {
+      <span class="t-kw">return</span> { segments: [{ source: "input", stability: "volatile",
+                            messages: [assembledFromParts("user", message, true)] }],
+               totalTokens: 0 };
+    },
+  };
+}</code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-content">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/content.ts</span><span class="src">handoff §4.1 · D16</span>
+            </figcaption>
+            <pre>
+<code><span class="t-com">// PERSISTED — pristine, blob-only, the source of truth for storage AND cache.</span>
+<span class="t-com">// Non-text parts carry a sourceUri into the blob store. NEVER inline base64 at rest.</span>
+<span class="t-kw">type</span> ContentPart =
+  | { kind: 'text';  text: <span class="t-typ">string</span> }
+  | { kind: 'image'; mime: <span class="t-typ">string</span>; sourceUri: <span class="t-typ">string</span> }
+  | { kind: 'audio'; mime: <span class="t-typ">string</span>; sourceUri: <span class="t-typ">string</span>; transcript?: <span class="t-typ">string</span> }
+  | { kind: 'file';  mime: <span class="t-typ">string</span>; sourceUri: <span class="t-typ">string</span>; name?: <span class="t-typ">string</span> };
+
+<span class="t-kw">interface</span> <span class="t-typ">StoredMessage</span> { id: <span class="t-typ">string</span>; role: Role; content: ContentPart[]; createdAt: <span class="t-typ">string</span> }
+
+<span class="t-com">// ASSEMBLED — ephemeral, per-request. Wraps the pristine part by value and adds a</span>
+<span class="t-com">// meta channel. Transport intent (resolve) lives HERE, never on ContentPart.</span>
+<span class="t-kw">interface</span> AssembledPart    { part: ContentPart; meta?: { resolve?: <span class="t-typ">boolean</span> } }
+<span class="t-kw">interface</span> AssembledMessage { source: <span class="t-typ">StoredMessage</span>; parts: AssembledPart[]; meta?: Record&lt;<span class="t-typ">string</span>, <span class="t-typ">unknown</span>&gt; }
+
+<span class="t-com">// Rule: a part with meta.resolve === true (sent as bytes) MUST live in a</span>
+<span class="t-com">// volatile segment — hydrated bytes are not cacheable.</span></code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-store">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/store.ts</span><span class="src">handoff §4.2 · D1</span>
+            </figcaption>
+            <pre>
+<code><span class="t-kw">interface</span> <span class="t-typ">ConversationStore</span> {
+  <span class="t-com">// Retrieval is scope-based, not id-based, so callers ask in domain terms.</span>
+  listConversations(scope: <span class="t-typ">ConversationScope</span>): <span class="t-kw">Promise</span>&lt;ConversationMeta[]&gt;;
+  getConversation(id: <span class="t-typ">ConversationId</span>): <span class="t-kw">Promise</span>&lt;Conversation | null&gt;;
+  createConversation(scope: <span class="t-typ">ConversationScope</span>, meta?: Partial&lt;ConversationMeta&gt;): <span class="t-kw">Promise</span>&lt;Conversation&gt;;
+
+  appendMessages(id: <span class="t-typ">ConversationId</span>, msgs: <span class="t-typ">StoredMessage</span>[]): <span class="t-kw">Promise</span>&lt;<span class="t-typ">void</span>&gt;;
+  getMessages(id: <span class="t-typ">ConversationId</span>, opts?: { limit?: <span class="t-typ">number</span>; before?: <span class="t-typ">string</span> }): <span class="t-kw">Promise</span>&lt;<span class="t-typ">StoredMessage</span>[]&gt;;
+}</code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-extra">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/extra-context.ts</span><span class="src"
+              >handoff §4.2 · D14</span>
+            </figcaption>
+            <pre>
+<code><span class="t-com">// Scope-keyed arbitrary JSON. Client code WRITES it (out of band, control plane);</span>
+<span class="t-com">// the assembler READS it to pull derived domain data into context. Server never</span>
+<span class="t-com">// interprets the JSON. Named "extra-context" to avoid collision with prompt caching.</span>
+<span class="t-kw">interface</span> ExtraContextStore {
+  getExtraContext(scope: <span class="t-typ">ConversationScope</span>): <span class="t-kw">Promise</span>&lt;JsonValue | null&gt;;
+  setExtraContext(scope: <span class="t-typ">ConversationScope</span>, value: JsonValue): <span class="t-kw">Promise</span>&lt;<span class="t-typ">void</span>&gt;;
+  clearExtraContext(scope: <span class="t-typ">ConversationScope</span>): <span class="t-kw">Promise</span>&lt;<span class="t-typ">void</span>&gt;;
+
+  <span class="t-com">// Opt-in: walk from this scope up to the root, nearest ancestor first.</span>
+  <span class="t-com">// The assembler decides whether to inherit context from ancestor levels.</span>
+  getExtraContextChain?(scope: <span class="t-typ">ConversationScope</span>): <span class="t-kw">Promise</span>&lt;
+    Array&lt;{ scope: <span class="t-typ">ConversationScope</span>; value: JsonValue }&gt;
+  &gt;;
+}
+
+<span class="t-com">// --- the SOAP-note flow ---------------------------------------------------</span>
+<span class="t-com">// 1) client writes at the patient level when a vet finalizes a note:</span>
+<span class="t-kw">await</span> client.setExtraContext(["user_42","client_88","patient_3"], { lastSoapNote: "S: ..." });
+
+<span class="t-com">// 2) the assembler reads it on the next turn and adds it as a stable segment:</span>
+<span class="t-kw">const</span> extra = <span class="t-kw">await</span> store.getExtraContext(scope.slice(0, 3));   <span class="t-com">// walk up to patient</span>
+<span class="t-com">// -&gt; { source: "patient-soap", stability: "semi-static", messages: [systemNote(...)] }</span></code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-blob">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/blob.ts</span><span class="src"
+              >handoff §4.4a · D16 / D17</span>
+            </figcaption>
+            <pre>
+<code><span class="t-com">// S3-compatible store with WRITE-BEHIND mint (D17): UUID returned synchronously,</span>
+<span class="t-com">// upload runs in the background, bytes also held in an in-process pending buffer.</span>
+<span class="t-kw">interface</span> BlobStore {
+  mint(bytes: Uint8Array, mime: <span class="t-typ">string</span>): {
+    uuid: <span class="t-typ">string</span>;
+    ref: <span class="t-typ">string</span>;              <span class="t-com">// blob://&lt;bucket&gt;/&lt;uuid&gt;</span>
+    flushed: <span class="t-kw">Promise</span>&lt;<span class="t-typ">void</span>&gt;;   <span class="t-com">// durability — the LLM call NEVER awaits this</span>
+  };
+  getBytes(ref: <span class="t-typ">string</span>): <span class="t-kw">Promise</span>&lt;Uint8Array&gt;;   <span class="t-com">// pending-buffer-first, then S3</span>
+  resolveUrl(ref: <span class="t-typ">string</span>): <span class="t-kw">Promise</span>&lt;<span class="t-typ">string</span>&gt;;     <span class="t-com">// fetchable URL for the debug UI</span>
+}
+
+<span class="t-com">// Lives in the provider adapter — the ONLY thing that knows vendor media encoding.</span>
+<span class="t-com">// Reads meta.resolve; hydrates resolve:true parts to bytes (transient base64 only</span>
+<span class="t-com">// if the provider requires it); otherwise passes a resolved URL.</span>
+<span class="t-kw">interface</span> MediaResolver {
+  toProviderPayload(messages: AssembledMessage[], provider: ProviderId): <span class="t-kw">Promise</span>&lt;ProviderContent&gt;;
+}</code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-cache">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/cache.ts</span><span class="src">handoff §4.4 · D4</span>
+            </figcaption>
+            <pre>
+<code><span class="t-kw">interface</span> <span class="t-typ">PreparedContext</span> {
+  messages: <span class="t-typ">StoredMessage</span>[];     <span class="t-com">// final flat array to send</span>
+  systemPrompt: <span class="t-typ">string</span>;
+  breakpoints: <span class="t-typ">CacheBreakpoint</span>[];
+  prefixTokens: <span class="t-typ">number</span>;          <span class="t-com">// tokens in the cacheable prefix (0 for passthrough)</span>
+}
+
+<span class="t-kw">interface</span> <span class="t-typ">CacheStrategy</span> {
+  prepare(ctx: <span class="t-typ">AssembledContext</span>): <span class="t-typ">PreparedContext</span>;   <span class="t-com">// vendor-aware, domain-agnostic</span>
+}
+
+<span class="t-com">// Default for v1: send everything, no breakpoints, prefixTokens = 0.</span></code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-proxy">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/proxy.ts</span><span class="src">handoff §4.5</span>
+            </figcaption>
+            <pre>
+<code><span class="t-kw">interface</span> <span class="t-typ">Usage</span> {
+  promptTokens: <span class="t-typ">number</span>;
+  completionTokens: <span class="t-typ">number</span>;
+  cachedTokens: <span class="t-typ">number</span>;          <span class="t-com">// recorded from day one, even under passthrough</span>
+}
+
+<span class="t-kw">interface</span> <span class="t-typ">LLMProxy</span> {
+  complete(req: LLMRequest, ctx: <span class="t-typ">CallContext</span>): <span class="t-kw">Promise</span>&lt;LLMResponse&gt;;
+}
+
+<span class="t-com">// The full envelope recorded for EVERY call. This IS the eval dataset later.</span>
+<span class="t-kw">interface</span> <span class="t-typ">CallRecord</span> {
+  traceId: <span class="t-typ">string</span>;
+  conversationId: <span class="t-typ">ConversationId</span>;
+  scope: <span class="t-typ">ConversationScope</span>;
+  systemPrompt: <span class="t-typ">string</span>;
+  requestMessages: <span class="t-typ">StoredMessage</span>[];   <span class="t-com">// exact context sent</span>
+  breakpoints: <span class="t-typ">CacheBreakpoint</span>[];
+  model: <span class="t-typ">string</span>;
+  response: LLMResponse;
+  usage: <span class="t-typ">Usage</span>;                       <span class="t-com">// cache hit rate is derived from here</span>
+  latencyMs: <span class="t-typ">number</span>;
+  timestamp: <span class="t-typ">string</span>;
+  error?: { stage: 'assemble'|'cache'|'llm'|'persist'; message: <span class="t-typ">string</span> };
+}</code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-debug">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">types/debug.ts</span><span class="src">handoff §4.6 · D10</span>
+            </figcaption>
+            <pre>
+<code><span class="t-kw">type</span> <span class="t-typ">DebugEvent</span> =
+  | { <span class="t-kw">type</span>: 'request.received';  traceId: <span class="t-typ">string</span>; conversationId: <span class="t-typ">string</span>; scope: <span class="t-typ">ConversationScope</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'context.assembled'; traceId: <span class="t-typ">string</span>; segments: <span class="t-typ">ContextSegment</span>[]; totalTokens: <span class="t-typ">number</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'cache.prepared';    traceId: <span class="t-typ">string</span>; breakpoints: <span class="t-typ">CacheBreakpoint</span>[]; prefixTokens: <span class="t-typ">number</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'llm.request';       traceId: <span class="t-typ">string</span>; model: <span class="t-typ">string</span>; messages: <span class="t-typ">StoredMessage</span>[]; systemPrompt: <span class="t-typ">string</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'llm.chunk';         traceId: <span class="t-typ">string</span>; delta: <span class="t-typ">string</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'llm.response';      traceId: <span class="t-typ">string</span>; reply: <span class="t-typ">string</span>; usage: <span class="t-typ">Usage</span>; latencyMs: <span class="t-typ">number</span>; ts: <span class="t-typ">string</span> }
+  | { <span class="t-kw">type</span>: 'error';             traceId: <span class="t-typ">string</span>; stage: DebugStage; message: <span class="t-typ">string</span>; ts: <span class="t-typ">string</span> };
+
+<span class="t-kw">interface</span> <span class="t-typ">DebugChannel</span> { emit(event: <span class="t-typ">DebugEvent</span>): <span class="t-typ">void</span>; }   <span class="t-com">// proxy depends on THIS, not on a transport</span>
+
+<span class="t-kw">class</span> NullDebugChannel <span class="t-kw">implements</span> <span class="t-typ">DebugChannel</span> { emit(): <span class="t-typ">void</span> {} }   <span class="t-com">// production default: zero overhead</span></code></pre>
+          </figure>
+        </div>
+        <div class="tabpane" id="i-facade">
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">agent/send.ts</span><span class="src"
+              >handoff §4.8 · D5 / D15</span>
+            </figcaption>
+            <pre>
+<code><span class="t-kw">async</span> send(input: <span class="t-typ">AgentInput</span>): <span class="t-kw">Promise</span>&lt;<span class="t-typ">AgentResponse</span>&gt; {
+  <span class="t-kw">const</span> agent = this.registry.get(input.agent);
+  <span class="t-kw">if</span> (!agent) <span class="t-kw">throw</span> <span class="t-kw">new</span> NotFound(`<span class="t-typ">unknown</span> agent: ${input.agent}`);   <span class="t-com">// 404</span>
+
+  <span class="t-kw">const</span> userMsg = messageFromParts('user', input.input);
+
+  <span class="t-com">// 1. persist incoming turn — the hook decides (no-op for utility agents)</span>
+  <span class="t-kw">const</span> conversationId = <span class="t-kw">await</span> agent.persist.beginTurn(input.scope, input.conversationId, userMsg);
+
+  <span class="t-com">// 2. assemble via the agent's hook (history may be [] for utility agents)</span>
+  <span class="t-kw">const</span> assembled = <span class="t-kw">await</span> agent.assemble({
+    scope: input.scope, conversationId, input: input.input, store: readOnly(this.store),
+  });
+
+  <span class="t-com">// 3. agent's cache strategy (passthrough by default)</span>
+  <span class="t-kw">const</span> prepared = agent.cache.prepare(assembled);
+
+  <span class="t-com">// 4. call the LLM — the MediaResolver hydrates resolve:true parts to bytes</span>
+  <span class="t-kw">const</span> ctx = { agent: input.agent, conversationId, scope: input.scope, traceId: newTraceId() };
+  <span class="t-kw">const</span> res = <span class="t-kw">await</span> this.proxy.complete({ prepared, model: agent.model }, ctx);
+
+  <span class="t-com">// 5. persist response — hook decides</span>
+  <span class="t-kw">await</span> agent.persist.endTurn(input.scope, conversationId, userMsg, assistantMsg(res.reply));
+
+  <span class="t-kw">return</span> { reply: res.reply, conversationId, traceId: ctx.traceId, usage: res.usage };
+}</code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <!-- ASSEMBLER -->
+      <section id="assembler">
+        <div class="sec-head">
+          <span class="sec-num">04</span><h2>
+            Agents: one file, one manifest, persistence as a hook
+          </h2>
+        </div>
+        <p class="lede">
+          An agent is a single file — <span class="inline-mono">&lt;name&gt;.agent.ts</span> — whose
+          async factory returns a manifest of optional hooks (assemble, cache, persist). The
+          filename is its identity; the server discovers all agents by directory scan at startup.
+          There is one kind of agent: a "one-shot" utility (summarizer, transcriber) is just <span
+            class="inline-mono"
+          >persist: false</span> — no stored messages, but identical observability.
+        </p>
+
+        <div class="grid2">
+          <div>
+            <h4
+              style="font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft)"
+            >
+              Segment order · most-stable first
+            </h4>
+            <p style="color: var(--ink-soft); font-size: 0.95rem">
+              The assembler tags each segment with a stability class. The cache strategy reads those
+              tags to place breakpoints later — the two never reference each other directly.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 14px">
+              <div class="card" style="padding: 12px 15px">
+                <span class="stab static">static</span> &nbsp;system / clinic prompt — shared across
+                everyone
+              </div>
+              <div class="card" style="padding: 12px 15px">
+                <span class="stab semi">semi-static</span> &nbsp;client profile — shared across this
+                client's pets
+              </div>
+              <div class="card" style="padding: 12px 15px">
+                <span class="stab semi">semi-static</span> &nbsp;patient record — shared across this
+                pet's conversations
+              </div>
+              <div class="card" style="padding: 12px 15px">
+                <span class="stab vol">volatile</span> &nbsp;this conversation — changes every turn
+              </div>
+            </div>
+            <div class="note warn" style="margin-top: 16px">
+              <span class="lbl">Caching depends on it</span>For an upper segment to hit cache across
+              conversations, its serialized form must be <b>byte-identical</b> every time. The
+              assembler owns deterministic normalization — sorted keys, fixed formatting, no
+              timestamps.
+            </div>
+            <div class="note" style="margin-top: 14px">
+              <span class="lbl">Extra-context · D14</span>Derived domain data (a patient's last SOAP
+              note, allergies, a rolling summary) is written by client code to a <b>scope-keyed
+                store</b> and read by the assembler. Set at the patient level, it naturally lands in
+              the <span class="stab semi">semi-static</span> prefix region. See the Extra-context
+              tab above.
+            </div>
+            <div class="note" style="margin-top: 14px">
+              <span class="lbl">Media · D16 / D17</span>Content is normalized <b>parts</b>
+              (text/image/audio/file); media is <b>blob-only</b> (a <span class="inline-mono"
+              >sourceUri</span>), never base64 at rest. The persisted part stays pristine; the
+              assembler tags an <em>assembled</em> part with <span class="inline-mono"
+              >resolve: true</span> to have the resolver hydrate it to bytes at the transport
+              boundary. The message list always holds refs, so the cache prefix stays byte-stable.
+              Blob upload is write-behind, so the LLM call never waits on persistence. See the
+              Content and Blob tabs.
+            </div>
+          </div>
+          <div>
+            <figure class="code">
+              <figcaption class="code-bar">
+                <span class="fname">assembler hook contract</span><span class="src"
+                >handoff §4.3 · D3 / D11</span>
+              </figcaption>
+              <pre>
+<code><span class="t-kw">type</span> <span class="t-typ">SegmentStability</span> = 'static' | 'semi-static' | 'volatile';
+
+<span class="t-kw">interface</span> <span class="t-typ">ContextSegment</span> {
+  source: <span class="t-typ">string</span>;                <span class="t-com">// free-form label, e.g. 'system' | 'patient-soap' | 'history'</span>
+  stability: <span class="t-typ">SegmentStability</span>;   <span class="t-com">// the contract with CacheStrategy</span>
+  messages: <span class="t-typ">StoredMessage</span>[];
+}
+
+<span class="t-com">// Read-only slice handed to hooks — reads conversations AND extra-context, never writes.</span>
+<span class="t-kw">type</span> <span class="t-typ">ReadOnlyConversationStore</span> =
+  <span class="t-kw">Pick</span>&lt;<span class="t-typ">ConversationStore</span>, 'listConversations' | 'getConversation' | 'getMessages'&gt; &amp;
+  <span class="t-kw">Pick</span>&lt;ExtraContextStore, 'getExtraContext' | 'getExtraContextChain'&gt;;
+
+<span class="t-kw">interface</span> <span class="t-typ">AssemblerInput</span> {
+  scope: <span class="t-typ">ConversationScope</span>;
+  conversationId?: <span class="t-typ">ConversationId</span>;
+  message: <span class="t-typ">string</span>;                     <span class="t-com">// the incoming user turn</span>
+  store: <span class="t-typ">ReadOnlyConversationStore</span>;    <span class="t-com">// read-only access to persistence</span>
+}
+
+<span class="t-com">// THE CONTRACT every drop-in assembler file must export.</span>
+<span class="t-kw">type</span> <span class="t-typ">AssemblerHook</span> = (input: <span class="t-typ">AssemblerInput</span>) =&gt; <span class="t-kw">Promise</span>&lt;<span class="t-typ">AssembledContext</span>&gt;;</code></pre>
+            </figure>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-top: 22px">
+          <div>
+            <h4
+              style="font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft)"
+            >
+              Default · zero config
+            </h4>
+            <figure class="code">
+              <figcaption class="code-bar">
+                <span class="fname">default-assembler.ts</span><span class="src"
+                >used when no hook file is present</span>
+              </figcaption>
+              <pre>
+<code><span class="t-kw">export</span> <span class="t-kw">const</span> defaultAssembler: <span class="t-typ">AssemblerHook</span> = <span class="t-kw">async</span> ({ scope, conversationId, store }) =&gt; {
+  <span class="t-kw">const</span> id = conversationId ?? (<span class="t-kw">await</span> store.listConversations(scope))[0]?.id;
+  <span class="t-kw">const</span> messages = id ? <span class="t-kw">await</span> store.getMessages(id) : [];
+  <span class="t-kw">return</span> {
+    segments: [{ source: 'conversation', stability: 'volatile', messages }],
+    totalTokens: countTokens(messages),
+  };
+};</code></pre>
+            </figure>
+          </div>
+          <div>
+            <h4
+              style="font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft)"
+            >
+              Loader · absent → default, broken → loud
+            </h4>
+            <figure class="code">
+              <figcaption class="code-bar">
+                <span class="fname">hook-loader.ts</span><span class="src">D7 / D11</span>
+              </figcaption>
+              <pre>
+<code><span class="t-kw">const</span> HOOK_PATH = "./assembler/hook.ts";   <span class="t-com">// the ONE conventional location</span>
+
+<span class="t-kw">export</span> <span class="t-kw">async</span> <span class="t-kw">function</span> loadAssembler(): <span class="t-kw">Promise</span>&lt;{ hook: <span class="t-typ">AssemblerHook</span>; source: "custom" | "default" }&gt; {
+  try {
+    <span class="t-kw">const</span> mod = <span class="t-kw">await</span> <span class="t-kw">import</span>(HOOK_PATH);
+    <span class="t-kw">if</span> (<span class="t-kw">typeof</span> mod.assemble !== "<span class="t-kw">function</span>") {
+      <span class="t-kw">throw</span> <span class="t-kw">new</span> Error(`${HOOK_PATH} exports no 'assemble' <span class="t-kw">function</span>`);   <span class="t-com">// present but broken -&gt; loud</span>
+    }
+    <span class="t-kw">return</span> { hook: mod.assemble as <span class="t-typ">AssemblerHook</span>, source: "custom" };
+  } catch (err) {
+    <span class="t-kw">const</span> msg = String(err);
+    <span class="t-kw">if</span> (msg.includes("Module not found") || msg.includes("Cannot find")) {
+      <span class="t-kw">return</span> { hook: defaultAssembler, source: "default" };            <span class="t-com">// absent -&gt; default, no crash</span>
+    }
+    <span class="t-kw">throw</span> err;
+  }
+}</code></pre>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONTRACTS -->
+      <section id="contracts">
+        <div class="sec-head"><span class="sec-num">05</span><h2>API contracts</h2></div>
+        <p class="lede">
+          Two machine-readable specs, embedded in full below. Sync request/response is OpenAPI; the
+          streaming debug channel is AsyncAPI — different shapes need different spec languages
+          (D13). The SDK is generated from and validated against both.
+        </p>
+        <details class="spec" open>
+          <summary>
+            <span class="arrow">▸</span> openapi.yaml — control / data plane <span class="count"
+            >OpenAPI 3.1 · 408 lines</span>
+          </summary>
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">openapi.yaml</span><span class="src"
+              >OpenAPI 3.1 · control plane</span>
+            </figcaption>
+            <pre>
+<code><span class="t-key">openapi</span>: 3.1.0
+<span class="t-key">info</span>:
+  <span class="t-key">title</span>: Conversation Proxy — Control/Data Plane
+  <span class="t-key">version</span>: 0.1.0
+  <span class="t-key">description</span>: &gt;
+    Synchronous REST API for the conversation proxy service. Covers sending turns,
+    managing conversations, previewing assembled context (without calling the LLM),
+    and querying call-record telemetry. The streaming debug channel is specified
+    separately in asyncapi.yaml.
+<span class="t-key">servers</span>:
+  - <span class="t-key">url</span>: '{baseUrl}'
+    <span class="t-key">variables</span>:
+      <span class="t-key">baseUrl</span>:
+        <span class="t-key">default</span>: http://localhost:8787
+<span class="t-key">security</span>:
+  - <span class="t-key">apiKey</span>: []
+<span class="t-key">paths</span>:
+  <span class="t-key">/conversations</span>:
+    <span class="t-key">post</span>:
+      <span class="t-key">operationId</span>: createConversation
+      <span class="t-key">summary</span>: Create a conversation under a scope
+      <span class="t-key">requestBody</span>:
+        <span class="t-key">required</span>: true
+        <span class="t-key">content</span>:
+          <span class="t-key">application/json</span>:
+            <span class="t-key">schema</span>:
+              <span class="t-key">type</span>: object
+              <span class="t-key">required</span>: [scope]
+              <span class="t-key">properties</span>:
+                <span class="t-key">scope</span>: { $ref: '#/components/schemas/ConversationScope' }
+                <span class="t-key">meta</span>:
+                  <span class="t-key">type</span>: object
+                  <span class="t-key">additionalProperties</span>: true
+      <span class="t-key">responses</span>:
+        '201':
+          <span class="t-key">description</span>: Created
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/ConversationMeta' }
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: listConversations
+      <span class="t-key">summary</span>: List conversations by scope
+      <span class="t-key">parameters</span>:
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scope
+          <span class="t-key">required</span>: true
+          <span class="t-key">description</span>: &gt;
+            Hierarchy elements joined by '/' and each percent-encoded
+            (e.g. user_42%2Fclient_88%2Fpatient_3).
+          <span class="t-key">schema</span>: { type: string }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>:
+                <span class="t-key">type</span>: array
+                <span class="t-key">items</span>: { $ref: '#/components/schemas/ConversationMeta' }
+  /conversations/{id}:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: getConversation
+      <span class="t-key">summary</span>: Fetch a conversation with its messages
+      <span class="t-key">parameters</span>:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/Conversation' }
+        '404': { description: Not found }
+  <span class="t-key">/agents</span>:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: listAgents
+      <span class="t-key">summary</span>: List loaded agents
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>:
+                <span class="t-key">type</span>: array
+                <span class="t-key">items</span>:
+                  <span class="t-key">type</span>: object
+                  <span class="t-key">required</span>: [name, persists]
+                  <span class="t-key">properties</span>:
+                    <span class="t-key">name</span>: { type: string }
+                    <span class="t-key">persists</span>: { type: boolean }
+  /agents/{agent}/messages:
+    <span class="t-key">post</span>:
+      <span class="t-key">operationId</span>: send
+      <span class="t-key">summary</span>: Send a turn to a named agent and get the reply (the facade send())
+      <span class="t-key">description</span>: &gt;
+        `{agent}` is the agent's filename identity (e.g. "transcribe", "summarize",
+        or "default"). Unknown agent → 404. Persisting agents return a
+        conversationId; utility (persist:false) agents do not.
+      <span class="t-key">parameters</span>:
+        - { in: path, name: agent, required: true, schema: { type: string } }
+      <span class="t-key">requestBody</span>:
+        <span class="t-key">required</span>: true
+        <span class="t-key">content</span>:
+          <span class="t-key">application/json</span>:
+            <span class="t-key">schema</span>:
+              <span class="t-key">type</span>: object
+              <span class="t-key">required</span>: [scope, input]
+              <span class="t-key">properties</span>:
+                <span class="t-key">scope</span>: { $ref: '#/components/schemas/ConversationScope' }
+                <span class="t-key">conversationId</span>: { type: string }
+                <span class="t-key">input</span>:
+                  <span class="t-key">type</span>: array
+                  <span class="t-key">items</span>: { $ref: '#/components/schemas/ContentPart' }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/AgentResponse' }
+        '404': { description: Unknown agent }
+  /agents/{agent}/context:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: previewContext
+      <span class="t-key">summary</span>: Show what context the agent WOULD assemble, without calling the LLM
+      <span class="t-key">parameters</span>:
+        - { in: path, name: agent, required: true, schema: { type: string } }
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scope
+          <span class="t-key">required</span>: true
+          <span class="t-key">schema</span>: { type: string }
+        - { in: query, name: conversationId, required: false, schema: { type: string } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/AssembledContext' }
+  <span class="t-key">/blobs</span>:
+    <span class="t-key">post</span>:
+      <span class="t-key">operationId</span>: uploadBlob
+      <span class="t-key">summary</span>: Upload media (write-behind mint); returns a sourceUri to embed in a ContentPart
+      <span class="t-key">requestBody</span>:
+        <span class="t-key">required</span>: true
+        <span class="t-key">content</span>:
+          <span class="t-key">application/octet-stream</span>:
+            <span class="t-key">schema</span>: { type: string, format: binary }
+      <span class="t-key">responses</span>:
+        '201':
+          <span class="t-key">description</span>: Minted (upload may still be flushing)
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>:
+                <span class="t-key">type</span>: object
+                <span class="t-key">required</span>: [uuid, sourceUri]
+                <span class="t-key">properties</span>:
+                  <span class="t-key">uuid</span>: { type: string }
+                  <span class="t-key">sourceUri</span>: { type: string }
+  /blobs/{uuid}:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: getBlob
+      <span class="t-key">summary</span>: Fetch/stream a blob (debug download/play links resolve here)
+      <span class="t-key">parameters</span>:
+        - { in: path, name: uuid, required: true, schema: { type: string } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/octet-stream</span>:
+              <span class="t-key">schema</span>: { type: string, format: binary }
+        '404': { description: Not found }
+  /conversations/{id}/context_legacy:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: previewContextLegacy
+      <span class="t-key">summary</span>: (deprecated) use /agents/{agent}/context
+      <span class="t-key">parameters</span>:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/AssembledContext' }
+  <span class="t-key">/extra-context</span>:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: getExtraContext
+      <span class="t-key">summary</span>: Read scope-attached JSON (D14)
+      <span class="t-key">parameters</span>:
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scope
+          <span class="t-key">required</span>: true
+          <span class="t-key">description</span>: Hierarchy elements joined by '/' and percent-encoded.
+          <span class="t-key">schema</span>: { type: string }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK (value, or null if unset)
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/JsonValue' }
+    <span class="t-key">put</span>:
+      <span class="t-key">operationId</span>: setExtraContext
+      <span class="t-key">summary</span>: Write scope-attached JSON (D14)
+      <span class="t-key">parameters</span>:
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scope
+          <span class="t-key">required</span>: true
+          <span class="t-key">schema</span>: { type: string }
+      <span class="t-key">requestBody</span>:
+        <span class="t-key">required</span>: true
+        <span class="t-key">content</span>:
+          <span class="t-key">application/json</span>:
+            <span class="t-key">schema</span>:
+              <span class="t-key">type</span>: object
+              <span class="t-key">required</span>: [value]
+              <span class="t-key">properties</span>:
+                <span class="t-key">value</span>: { $ref: '#/components/schemas/JsonValue' }
+      <span class="t-key">responses</span>:
+        '204': { description: Stored }
+    <span class="t-key">delete</span>:
+      <span class="t-key">operationId</span>: clearExtraContext
+      <span class="t-key">summary</span>: Clear scope-attached JSON (D14)
+      <span class="t-key">parameters</span>:
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scope
+          <span class="t-key">required</span>: true
+          <span class="t-key">schema</span>: { type: string }
+      <span class="t-key">responses</span>:
+        '204': { description: Cleared }
+  /records/{traceId}:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: getRecord
+      <span class="t-key">summary</span>: Fetch a full call-record envelope
+      <span class="t-key">parameters</span>:
+        - { in: path, name: traceId, required: true, schema: { type: string } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>: { $ref: '#/components/schemas/CallRecord' }
+        '404': { description: Not found }
+  <span class="t-key">/records</span>:
+    <span class="t-key">get</span>:
+      <span class="t-key">operationId</span>: queryRecords
+      <span class="t-key">summary</span>: Query call-record metadata
+      <span class="t-key">parameters</span>:
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: agent
+          <span class="t-key">required</span>: false
+          <span class="t-key">schema</span>: { type: string }
+        - <span class="t-key">in</span>: query
+          <span class="t-key">name</span>: scopePrefix
+          <span class="t-key">required</span>: false
+          <span class="t-key">description</span>: Hierarchy prefix, '/'-joined and percent-encoded; matches records whose scope starts with it.
+          <span class="t-key">schema</span>: { type: string }
+        - { in: query, name: conversationId, schema: { type: string } }
+        - { in: query, name: model, schema: { type: string } }
+        - { in: query, name: since, schema: { type: string, format: date-time } }
+        - { in: query, name: until, schema: { type: string, format: date-time } }
+      <span class="t-key">responses</span>:
+        '200':
+          <span class="t-key">description</span>: OK
+          <span class="t-key">content</span>:
+            <span class="t-key">application/json</span>:
+              <span class="t-key">schema</span>:
+                <span class="t-key">type</span>: array
+                <span class="t-key">items</span>: { $ref: '#/components/schemas/CallRecordMeta' }
+<span class="t-key">components</span>:
+  <span class="t-key">securitySchemes</span>:
+    <span class="t-key">apiKey</span>:
+      <span class="t-key">type</span>: apiKey
+      <span class="t-key">in</span>: header
+      <span class="t-key">name</span>: Authorization
+  <span class="t-key">schemas</span>:
+    <span class="t-key">ConversationScope</span>:
+      <span class="t-key">type</span>: array
+      <span class="t-key">description</span>: &gt;
+        Ordered hierarchy of opaque string IDs, broadest level first and the leaf
+        last (e.g. ["user_42","client_88","patient_3","2026-W26"]). The server
+        attaches no meaning to any level.
+      <span class="t-key">items</span>: { type: string }
+      <span class="t-key">minItems</span>: 1
+    <span class="t-key">JsonValue</span>:
+      <span class="t-key">description</span>: Arbitrary JSON value stored in the extra-context store.
+      <span class="t-key">nullable</span>: true
+    <span class="t-key">ConversationMeta</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [id, scope, createdAt, updatedAt]
+      <span class="t-key">properties</span>:
+        <span class="t-key">id</span>: { type: string }
+        <span class="t-key">scope</span>: { $ref: '#/components/schemas/ConversationScope' }
+        <span class="t-key">title</span>: { type: string }
+        <span class="t-key">createdAt</span>: { type: string, format: date-time }
+        <span class="t-key">updatedAt</span>: { type: string, format: date-time }
+        <span class="t-key">metadata</span>: { type: object, additionalProperties: true }
+    <span class="t-key">ContentPart</span>:
+      <span class="t-key">description</span>: Normalized content part (D16). Non-text parts are blob-only via sourceUri.
+      <span class="t-key">oneOf</span>:
+        - <span class="t-key">type</span>: object
+          <span class="t-key">required</span>: [kind, text]
+          <span class="t-key">properties</span>:
+            <span class="t-key">kind</span>: { type: string, enum: [text] }
+            <span class="t-key">text</span>: { type: string }
+        - <span class="t-key">type</span>: object
+          <span class="t-key">required</span>: [kind, mime, sourceUri]
+          <span class="t-key">properties</span>:
+            <span class="t-key">kind</span>: { type: string, enum: [image, audio, file] }
+            <span class="t-key">mime</span>: { type: string }
+            <span class="t-key">sourceUri</span>: { type: string }
+            <span class="t-key">transcript</span>: { type: string }
+            <span class="t-key">name</span>: { type: string }
+    <span class="t-key">PartMeta</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">description</span>: Ephemeral per-request transport metadata (D16) — never persisted.
+      <span class="t-key">properties</span>:
+        <span class="t-key">resolve</span>: { type: boolean, description: "true → hydrate to bytes for the provider" }
+    <span class="t-key">AssembledPart</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [part]
+      <span class="t-key">properties</span>:
+        <span class="t-key">part</span>: { $ref: '#/components/schemas/ContentPart' }
+        <span class="t-key">meta</span>: { $ref: '#/components/schemas/PartMeta' }
+    <span class="t-key">AssembledMessage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [source, parts]
+      <span class="t-key">properties</span>:
+        <span class="t-key">source</span>: { $ref: '#/components/schemas/StoredMessage' }
+        <span class="t-key">parts</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledPart' }
+        <span class="t-key">meta</span>: { type: object, additionalProperties: true }
+    <span class="t-key">StoredMessage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [id, role, content, createdAt]
+      <span class="t-key">properties</span>:
+        <span class="t-key">id</span>: { type: string }
+        <span class="t-key">role</span>: { type: string, enum: [system, user, assistant, tool] }
+        <span class="t-key">content</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/ContentPart' }
+        <span class="t-key">tokenCount</span>: { type: integer }
+        <span class="t-key">createdAt</span>: { type: string, format: date-time }
+        <span class="t-key">metadata</span>: { type: object, additionalProperties: true }
+    <span class="t-key">Conversation</span>:
+      <span class="t-key">allOf</span>:
+        - <span class="t-key">$ref</span>: '#/components/schemas/ConversationMeta'
+        - <span class="t-key">type</span>: object
+          <span class="t-key">properties</span>:
+            <span class="t-key">messages</span>:
+              <span class="t-key">type</span>: array
+              <span class="t-key">items</span>: { $ref: '#/components/schemas/StoredMessage' }
+    <span class="t-key">ContextSegment</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [source, stability, messages]
+      <span class="t-key">properties</span>:
+        <span class="t-key">source</span>: { type: string }
+        <span class="t-key">stability</span>: { type: string, enum: [static, semi-static, volatile] }
+        <span class="t-key">messages</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledMessage' }
+    <span class="t-key">AssembledContext</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [segments, totalTokens]
+      <span class="t-key">properties</span>:
+        <span class="t-key">segments</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/ContextSegment' }
+        <span class="t-key">totalTokens</span>: { type: integer }
+    <span class="t-key">Usage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [promptTokens, completionTokens, cachedTokens]
+      <span class="t-key">properties</span>:
+        <span class="t-key">promptTokens</span>: { type: integer }
+        <span class="t-key">completionTokens</span>: { type: integer }
+        <span class="t-key">cachedTokens</span>: { type: integer }
+    <span class="t-key">AgentResponse</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [reply, traceId, usage]
+      <span class="t-key">properties</span>:
+        <span class="t-key">reply</span>: { type: string }
+        <span class="t-key">conversationId</span>: { type: string, description: "present only for persisting agents" }
+        <span class="t-key">traceId</span>: { type: string }
+        <span class="t-key">usage</span>: { $ref: '#/components/schemas/Usage' }
+    <span class="t-key">CallRecordMeta</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [traceId, agent, model, usage, latencyMs, timestamp]
+      <span class="t-key">properties</span>:
+        <span class="t-key">traceId</span>: { type: string }
+        <span class="t-key">agent</span>: { type: string }
+        <span class="t-key">conversationId</span>: { type: string }
+        <span class="t-key">scope</span>: { $ref: '#/components/schemas/ConversationScope' }
+        <span class="t-key">model</span>: { type: string }
+        <span class="t-key">usage</span>: { $ref: '#/components/schemas/Usage' }
+        <span class="t-key">latencyMs</span>: { type: integer }
+        <span class="t-key">timestamp</span>: { type: string, format: date-time }
+        <span class="t-key">replyPreview</span>: { type: string }
+    <span class="t-key">CallRecord</span>:
+      <span class="t-key">allOf</span>:
+        - <span class="t-key">$ref</span>: '#/components/schemas/CallRecordMeta'
+        - <span class="t-key">type</span>: object
+          <span class="t-key">properties</span>:
+            <span class="t-key">systemPrompt</span>: { type: string }
+            <span class="t-key">requestMessages</span>:
+              <span class="t-key">type</span>: array
+              <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledMessage' }
+            <span class="t-key">error</span>:
+              <span class="t-key">type</span>: object
+              <span class="t-key">properties</span>:
+                <span class="t-key">stage</span>: { type: string, enum: [assemble, cache, llm, persist] }
+                <span class="t-key">message</span>: { type: string }
+</code></pre>
+          </figure>
+        </details>
+        <details class="spec">
+          <summary>
+            <span class="arrow">▸</span> asyncapi.yaml — debug plane (SSE) <span class="count"
+            >AsyncAPI 3.0 · 215 lines</span>
+          </summary>
+          <figure class="code">
+            <figcaption class="code-bar">
+              <span class="fname">asyncapi.yaml</span><span class="src"
+              >AsyncAPI 3.0 · debug plane</span>
+            </figcaption>
+            <pre>
+<code><span class="t-key">asyncapi</span>: 3.0.0
+<span class="t-key">info</span>:
+  <span class="t-key">title</span>: Conversation Proxy — Debug Plane
+  <span class="t-key">version</span>: 0.1.0
+  <span class="t-key">description</span>: &gt;
+    Event-driven specification for the real-time debug channel. A client (the
+    observation UI) subscribes over Server-Sent Events and receives the lifecycle
+    events of each LLM call as it flows through assemble -&gt; cache -&gt; llm -&gt; persist.
+    The synchronous control/data plane is specified separately in openapi.yaml.
+<span class="t-key">servers</span>:
+  <span class="t-key">debug</span>:
+    <span class="t-key">host</span>: 'localhost:8787'
+    <span class="t-key">pathname</span>: /debug
+    <span class="t-key">protocol</span>: sse
+    <span class="t-key">description</span>: Server-Sent Events stream of debug lifecycle events.
+<span class="t-key">channels</span>:
+  <span class="t-key">debugStream</span>:
+    <span class="t-key">address</span>: /debug/stream
+    <span class="t-key">description</span>: &gt;
+      SSE stream of DebugEvents. Optional query filters: traceId (single trace)
+      and types (comma-separated DebugEvent.type values). Each connection registers
+      a subscriber; closing the connection unsubscribes.
+    <span class="t-key">parameters</span>:
+      <span class="t-key">traceId</span>:
+        <span class="t-key">description</span>: Restrict the stream to a single trace.
+      <span class="t-key">types</span>:
+        <span class="t-key">description</span>: Comma-separated list of event types to include.
+    <span class="t-key">messages</span>:
+      <span class="t-key">requestReceived</span>: { $ref: '#/components/messages/RequestReceived' }
+      <span class="t-key">contextAssembled</span>: { $ref: '#/components/messages/ContextAssembled' }
+      <span class="t-key">cachePrepared</span>: { $ref: '#/components/messages/CachePrepared' }
+      <span class="t-key">llmRequest</span>: { $ref: '#/components/messages/LlmRequest' }
+      <span class="t-key">llmChunk</span>: { $ref: '#/components/messages/LlmChunk' }
+      <span class="t-key">llmResponse</span>: { $ref: '#/components/messages/LlmResponse' }
+      <span class="t-key">errorEvent</span>: { $ref: '#/components/messages/ErrorEvent' }
+<span class="t-key">operations</span>:
+  <span class="t-key">receiveDebugEvents</span>:
+    <span class="t-key">action</span>: receive
+    <span class="t-key">channel</span>: { $ref: '#/channels/debugStream' }
+    <span class="t-key">summary</span>: Subscribe to the live debug event stream.
+    <span class="t-key">messages</span>:
+      - { $ref: '#/channels/debugStream/messages/requestReceived' }
+      - { $ref: '#/channels/debugStream/messages/contextAssembled' }
+      - { $ref: '#/channels/debugStream/messages/cachePrepared' }
+      - { $ref: '#/channels/debugStream/messages/llmRequest' }
+      - { $ref: '#/channels/debugStream/messages/llmChunk' }
+      - { $ref: '#/channels/debugStream/messages/llmResponse' }
+      - { $ref: '#/channels/debugStream/messages/errorEvent' }
+<span class="t-key">components</span>:
+  <span class="t-key">messages</span>:
+    <span class="t-key">RequestReceived</span>:
+      <span class="t-key">name</span>: request.received
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, conversationId, scope, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: request.received }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">conversationId</span>: { type: string }
+          <span class="t-key">scope</span>: { $ref: '#/components/schemas/ConversationScope' }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">ContextAssembled</span>:
+      <span class="t-key">name</span>: context.assembled
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, segments, totalTokens, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: context.assembled }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">segments</span>:
+            <span class="t-key">type</span>: array
+            <span class="t-key">items</span>: { $ref: '#/components/schemas/ContextSegment' }
+          <span class="t-key">totalTokens</span>: { type: integer }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">CachePrepared</span>:
+      <span class="t-key">name</span>: cache.prepared
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, breakpoints, prefixTokens, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: cache.prepared }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">breakpoints</span>:
+            <span class="t-key">type</span>: array
+            <span class="t-key">items</span>: { $ref: '#/components/schemas/CacheBreakpoint' }
+          <span class="t-key">prefixTokens</span>: { type: integer }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">LlmRequest</span>:
+      <span class="t-key">name</span>: llm.request
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, model, messages, systemPrompt, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: llm.request }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">model</span>: { type: string }
+          <span class="t-key">messages</span>:
+            <span class="t-key">type</span>: array
+            <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledMessage' }
+          <span class="t-key">systemPrompt</span>: { type: string }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">LlmChunk</span>:
+      <span class="t-key">name</span>: llm.chunk
+      <span class="t-key">description</span>: Emitted only when the LLM response is streamed.
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, delta, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: llm.chunk }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">delta</span>: { type: string }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">LlmResponse</span>:
+      <span class="t-key">name</span>: llm.response
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, reply, usage, latencyMs, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: llm.response }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">reply</span>: { type: string }
+          <span class="t-key">usage</span>: { $ref: '#/components/schemas/Usage' }
+          <span class="t-key">latencyMs</span>: { type: integer }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+    <span class="t-key">ErrorEvent</span>:
+      <span class="t-key">name</span>: error
+      <span class="t-key">payload</span>:
+        <span class="t-key">type</span>: object
+        <span class="t-key">required</span>: [type, traceId, agent, stage, message, ts]
+        <span class="t-key">properties</span>:
+          <span class="t-key">type</span>: { const: error }
+          <span class="t-key">traceId</span>: { type: string }
+          <span class="t-key">agent</span>: { type: string }
+          <span class="t-key">stage</span>: { type: string, enum: [assemble, cache, llm, persist] }
+          <span class="t-key">message</span>: { type: string }
+          <span class="t-key">ts</span>: { type: string, format: date-time }
+  <span class="t-key">schemas</span>:
+    <span class="t-key">ConversationScope</span>:
+      <span class="t-key">type</span>: array
+      <span class="t-key">description</span>: Ordered hierarchy of opaque string IDs, broadest first, leaf last.
+      <span class="t-key">items</span>: { type: string }
+      <span class="t-key">minItems</span>: 1
+    <span class="t-key">ContentPart</span>:
+      <span class="t-key">description</span>: Normalized content part (D16); non-text parts are blob-only via sourceUri.
+      <span class="t-key">oneOf</span>:
+        - <span class="t-key">type</span>: object
+          <span class="t-key">required</span>: [kind, text]
+          <span class="t-key">properties</span>:
+            <span class="t-key">kind</span>: { type: string, enum: [text] }
+            <span class="t-key">text</span>: { type: string }
+        - <span class="t-key">type</span>: object
+          <span class="t-key">required</span>: [kind, mime, sourceUri]
+          <span class="t-key">properties</span>:
+            <span class="t-key">kind</span>: { type: string, enum: [image, audio, file] }
+            <span class="t-key">mime</span>: { type: string }
+            <span class="t-key">sourceUri</span>: { type: string }
+            <span class="t-key">transcript</span>: { type: string }
+            <span class="t-key">name</span>: { type: string }
+    <span class="t-key">StoredMessage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [id, role, content, createdAt]
+      <span class="t-key">properties</span>:
+        <span class="t-key">id</span>: { type: string }
+        <span class="t-key">role</span>: { type: string, enum: [system, user, assistant, tool] }
+        <span class="t-key">content</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/ContentPart' }
+        <span class="t-key">tokenCount</span>: { type: integer }
+        <span class="t-key">createdAt</span>: { type: string, format: date-time }
+    <span class="t-key">AssembledPart</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [part]
+      <span class="t-key">properties</span>:
+        <span class="t-key">part</span>: { $ref: '#/components/schemas/ContentPart' }
+        <span class="t-key">meta</span>:
+          <span class="t-key">type</span>: object
+          <span class="t-key">description</span>: Ephemeral transport metadata; media carried as metadata only (never bytes).
+          <span class="t-key">properties</span>:
+            <span class="t-key">resolve</span>: { type: boolean }
+    <span class="t-key">AssembledMessage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [source, parts]
+      <span class="t-key">properties</span>:
+        <span class="t-key">source</span>: { $ref: '#/components/schemas/StoredMessage' }
+        <span class="t-key">parts</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledPart' }
+    <span class="t-key">ContextSegment</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [source, stability, messages]
+      <span class="t-key">properties</span>:
+        <span class="t-key">source</span>: { type: string }
+        <span class="t-key">stability</span>: { type: string, enum: [static, semi-static, volatile] }
+        <span class="t-key">messages</span>:
+          <span class="t-key">type</span>: array
+          <span class="t-key">items</span>: { $ref: '#/components/schemas/AssembledMessage' }
+    <span class="t-key">CacheBreakpoint</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [afterSegmentIndex]
+      <span class="t-key">properties</span>:
+        <span class="t-key">afterSegmentIndex</span>: { type: integer }
+    <span class="t-key">Usage</span>:
+      <span class="t-key">type</span>: object
+      <span class="t-key">required</span>: [promptTokens, completionTokens, cachedTokens]
+      <span class="t-key">properties</span>:
+        <span class="t-key">promptTokens</span>: { type: integer }
+        <span class="t-key">completionTokens</span>: { type: integer }
+        <span class="t-key">cachedTokens</span>: { type: integer }
+</code></pre>
+          </figure>
+        </details>
+      </section>
+
+      <!-- WORKFLOWS -->
+      <section id="workflows">
+        <div class="sec-head">
+          <span class="sec-num">06</span><h2>How a request actually flows</h2>
+        </div>
+        <p class="lede">
+          The primary path — one user turn to one reply — touching every layer once. Run the trace
+          in the pipeline at the top of the page to watch it animate.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              App calls <code>send({ agent, scope, input })</code> through the SDK → <code>POST
+                /agents/:agent/messages</code>. <code>input</code> is an array of content parts
+              (text + media). Unknown agent → 404.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Store</b> appends the incoming user turn. Proxy emits <code
+              >request.received</code>.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Assembler hook</b> reads scope-attached extra-context (e.g. the patient's last SOAP
+              note) plus conversation history, normalizes the upper segments, returns
+              stability-tagged segments. Emits <code>context.assembled</code>.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Cache strategy</b> (passthrough) flattens to a single array, <code>prefixTokens =
+                0</code>. Emits <code>cache.prepared</code>.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Proxy</b> calls the provider, emits <code>llm.request</code> then <code
+              >llm.response</code>, and writes the full <code>CallRecord</code> envelope — the raw
+              material for later evals.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Store</b> appends the assistant reply. The app receives <code>{ reply,
+                conversationId, traceId, usage }</code>.
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <span class="lbl">Preview · no LLM</span>The observation UI can call the <em>same</em>
+          assembler hook without the proxy step (<code>POST /debug/preview</code>) to see exactly
+          what context <em>would</em> be sent — and whether the prefix is byte-stable — before any
+          real request goes out.
+        </div>
+      </section>
+
+      <!-- BUILD -->
+      <section id="build">
+        <div class="sec-head"><span class="sec-num">07</span><h2>Build order</h2></div>
+        <p class="lede">
+          Each stage is independently testable and yields something runnable. The tightest first
+          slice is stages 1–3.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Shared types package</b> — every interface plus the assembler test kit. No logic.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>InMemoryStore</b> + tests — append/retrieve, scope queries. No LLM.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Default assembler + loader</b> — assert all three paths: absent, valid custom,
+              broken custom.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>PassthroughCache</b> — returns everything, prefix 0, no breakpoints.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>LLMProxy</b> with a fake provider + NullDebugChannel + CallRecordStore — assert
+              envelope + emit sequence.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Facade</b> — inject fakes; assert orchestration order and traceId propagation.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Migration runner + 001_init</b> — dedicated schema, own ledger, coexists with
+              unrelated migrations.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>REST server + openapi.yaml</b> — wire endpoints, load the hook, validate responses
+              against the schema.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>BroadcastDebugChannel + SSE + asyncapi.yaml</b> + ContextExplorer — assert stream +
+              unsubscribe on disconnect.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Real provider adapter</b> (Anthropic / OpenAI) behind the proxy.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>PostgresStore</b> (Supabase) + 002_call_records — the whole suite passes unchanged
+              against Postgres.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>TypeScript SDK</b> wrapping REST + SSE, re-exporting shared types.
+            </div>
+          </div>
+          <div class="step">
+            <div class="n"></div>
+            <div class="sbody">
+              <b>Observation UI</b> — live stream, context inspector, preview, storage explorer.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RFC -->
+      <section id="rfc" style="border-bottom: 0">
+        <div class="sec-head">
+          <span class="sec-num">08</span><h2>This is a request for comment</h2>
+        </div>
+        <p class="lede">
+          The decisions above are firm but not yet built — this is the moment to challenge them. The
+          questions below are the ones the design deliberately left open; weigh in on these, or on
+          anything in the register you'd reconsider.
+        </p>
+        <div class="rfc">
+          <h3>Open questions awaiting a call</h3>
+          <p>
+            Each is deferred for a stated reason, with the trigger that should force the decision.
+            If you have a strong view on any — especially Q1 and Q2, which shape the schema early —
+            now is the time.
+          </p>
+          <div class="openq">
+            <div class="oq">
+              <div class="qid">Q1</div>
+              <div class="qt">
+                Call-record storage: shared Postgres (join-able) vs. separate sink like
+                ClickHouse<span>↳ decide when telemetry volume grows</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q2</div>
+              <div class="qt">
+                Data handling &amp; retention for clinical PII inside call-record envelopes<span>↳
+                  decide before production launch</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q3</div>
+              <div class="qt">
+                Eval harness specifics — metrics and dataset format<span>↳ depends on accumulated
+                  call records</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q4</div>
+              <div class="qt">
+                Streaming the LLM response to the client, not just internally<span>↳ when a
+                  real-time UX requirement appears</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q5</div>
+              <div class="qt">
+                Multi-provider routing / fallback<span>↳ when a second provider is needed</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q6</div>
+              <div class="qt">
+                Go rewrite of the proxy hot path<span>↳ only if profiling shows a process/memory
+                  bottleneck</span>
+              </div>
+            </div>
+            <div class="oq">
+              <div class="qid">Q7</div>
+              <div class="qt">
+                Auth model specifics for the two planes<span>↳ at first deployment</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <div>
+          Conversation Proxy &amp; Observability Module · RFC v0.1 · assembled from the build
+          handoff, openapi.yaml, and asyncapi.yaml.
+        </div>
+        <div class="files">
+          <span>CONVERSATION_PROXY_HANDOFF.md</span><span>openapi.yaml</span><span
+          >asyncapi.yaml</span><span>17 decisions</span><span>7 open questions</span>
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      (function () {
+        // Tabs
+        document.querySelectorAll(".tabs").forEach(function (group) {
+          var tabs = group.querySelectorAll(".tab");
+          tabs.forEach(function (tab) {
+            tab.addEventListener("click", function () {
+              tabs.forEach(function (t) {
+                t.setAttribute("aria-selected", "false");
+              });
+              tab.setAttribute("aria-selected", "true");
+              var section = group.closest("section");
+              section.querySelectorAll(".tabpane").forEach(function (p) {
+                p.classList.remove("show");
+              });
+              section.querySelector("#" + tab.dataset.tab).classList.add("show");
+            });
+          });
+        });
+
+        // Decision rows expand
+        document.querySelectorAll(".drow.open-row").forEach(function (row) {
+          row.addEventListener("click", function () {
+            row.classList.toggle("expanded");
+          });
+          row.setAttribute("tabindex", "0");
+          row.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              row.classList.toggle("expanded");
+            }
+          });
+        });
+
+        // Pipeline trace animation
+        var nodes = Array.prototype.slice.call(document.querySelectorAll(".flow .node"));
+        var status = document.getElementById("flowStatus");
+        var btn = document.getElementById("runFlow");
+        var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var labels = [
+          "persist turn",
+          "assemble",
+          "prepare (passthrough)",
+          "call LLM · record",
+          "persist reply",
+          "done",
+        ];
+        function runFlow() {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          nodes.forEach(function (n) {
+            n.classList.remove("lit");
+          });
+          if (reduce) {
+            nodes.forEach(function (n) {
+              n.classList.add("lit");
+            });
+            status.textContent = "traced";
+            btn.disabled = false;
+            return;
+          }
+          var i = 0;
+          (function tick() {
+            if (i > 0) {} // keep previous lit for a trailing effect
+            if (i < nodes.length) {
+              nodes[i].classList.add("lit");
+              status.textContent = labels[i];
+              i++;
+              setTimeout(tick, 520);
+            } else {
+              status.textContent = "done · " + nodes.length + " stages";
+              setTimeout(function () {
+                nodes.forEach(function (n) {
+                  n.classList.remove("lit");
+                });
+                status.textContent = "idle";
+                btn.disabled = false;
+              }, 1400);
+            }
+          })();
+        }
+        btn.addEventListener("click", runFlow);
+
+        // TOC active state via IntersectionObserver
+        var links = Array.prototype.slice.call(document.querySelectorAll("nav.toc a"));
+        var map = {};
+        links.forEach(function (a) {
+          map[a.getAttribute("href").slice(1)] = a;
+        });
+        var obs = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              links.forEach(function (a) {
+                a.classList.remove("active");
+              });
+              var a = map[e.target.id];
+              if (a) a.classList.add("active");
+            }
+          });
+        }, { rootMargin: "-45% 0px -50% 0px" });
+        document.querySelectorAll("section[id]").forEach(function (s) {
+          obs.observe(s);
+        });
+      })();
+    </script>
+  </body>
+</html>

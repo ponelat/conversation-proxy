@@ -1,0 +1,253 @@
+openapi: 3.1.0
+info:
+  title: conversation-proxy control & debug API
+  version: 0.1.0
+  description: >
+    The synchronous control/data plane and the read-only debug endpoints of
+    conversation-proxy (v1, lean text-only core). The live event stream is an SSE
+    channel documented separately (AsyncAPI, deferred). The SDK is generated from
+    / validated against this file (D13); CI asserts the server does not drift
+    (tests/openapi_test.ts).
+  license:
+    name: Apache-2.0
+servers:
+  - url: http://localhost:8787
+components:
+  securitySchemes:
+    controlToken:
+      type: http
+      scheme: bearer
+      description: CP_API_KEY — guards the control/data plane.
+    debugToken:
+      type: http
+      scheme: bearer
+      description: CP_DEBUG_TOKEN — guards the debug plane (also requires CP_DEBUG_ENABLED).
+  schemas:
+    Scope:
+      type: array
+      items: { type: string }
+      description: Ordered hierarchy of opaque IDs, broadest first (D2).
+    Usage:
+      type: object
+      properties:
+        promptTokens: { type: integer }
+        completionTokens: { type: integer }
+        cachedTokens: { type: integer }
+      required: [promptTokens, completionTokens, cachedTokens]
+    AgentResponse:
+      type: object
+      properties:
+        reply: { type: string }
+        conversationId: { type: string }
+        traceId: { type: string }
+        usage: { $ref: "#/components/schemas/Usage" }
+      required: [reply, traceId, usage]
+    ConversationMeta:
+      type: object
+      properties:
+        id: { type: string }
+        scope: { $ref: "#/components/schemas/Scope" }
+        title: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, scope, createdAt, updatedAt]
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+paths:
+  /health:
+    get:
+      summary: Liveness probe (unauthenticated)
+      responses:
+        "200": { description: ok }
+  /agents:
+    get:
+      summary: List loaded agents
+      security: [{ controlToken: [] }]
+      responses:
+        "200":
+          description: loaded agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    persists: { type: boolean }
+                  required: [name, persists]
+  /agents/{agent}/messages:
+    post:
+      summary: Send one turn to a named agent (the send() front door, D5/D15)
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: agent, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { $ref: "#/components/schemas/Scope" }
+                conversationId: { type: string }
+                input:
+                  description: A string, or an array of content parts.
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items: { type: object }
+              required: [scope, input]
+      responses:
+        "200":
+          description: the assistant reply + telemetry handle
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentResponse" }
+        "404":
+          description: unknown agent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /agents/{agent}/context:
+    get:
+      summary: Preview the context an agent would assemble (no LLM call)
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: agent, in: path, required: true, schema: { type: string } }
+        - {
+            name: scope,
+            in: query,
+            required: true,
+            schema: { type: string },
+            description: "slash-joined, percent-encoded scope",
+          }
+        - { name: conversationId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: assembled context }
+  /conversations:
+    post:
+      summary: Create a conversation
+      security: [{ controlToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { $ref: "#/components/schemas/Scope" }
+                meta: { type: object }
+              required: [scope]
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationMeta" }
+    get:
+      summary: List conversations at an exact scope
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: scope, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ConversationMeta" }
+  /conversations/{id}:
+    get:
+      summary: Fetch a conversation and its messages
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: conversation }
+        "404": { description: not found }
+  /records:
+    get:
+      summary: Query call envelopes
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: agent, in: query, schema: { type: string } }
+        - { name: scopePrefix, in: query, schema: { type: string } }
+        - { name: conversationId, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string } }
+        - { name: until, in: query, schema: { type: string } }
+      responses:
+        "200": { description: record metas }
+  /records/{traceId}:
+    get:
+      summary: Fetch one call envelope
+      security: [{ controlToken: [] }]
+      parameters:
+        - { name: traceId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: the CallRecord }
+        "404": { description: not found }
+  /debug/context/{traceId}:
+    get:
+      summary: The exact context that was sent for a past call
+      security: [{ debugToken: [] }]
+      parameters:
+        - { name: traceId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: assembled context }
+  /debug/preview:
+    post:
+      summary: Preview the context an agent would assemble (debug-plane variant)
+      security: [{ debugToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent: { type: string }
+                scope: { $ref: "#/components/schemas/Scope" }
+                conversationId: { type: string }
+              required: [agent, scope]
+      responses:
+        "200": { description: assembled context }
+  /debug/explore:
+    get:
+      summary: Browse storage and records under a scope prefix
+      security: [{ debugToken: [] }]
+      parameters:
+        - { name: scope, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: conversations + records }
+  /debug/events:
+    get:
+      summary: Poll for debug-event deltas by cursor (replaces the SSE stream)
+      description: >
+        Returns events with seq > `after`, plus a `cursor` to pass on the next
+        poll. Omit `after` to probe the current head cursor (no events). Clients
+        re-poll on an interval; no long-lived connection.
+      security: [{ debugToken: [] }]
+      parameters:
+        - { name: after, in: query, required: false, schema: { type: integer }, description: "cursor from the previous poll; omit to probe the head" }
+        - { name: limit, in: query, required: false, schema: { type: integer } }
+        - { name: traceId, in: query, required: false, schema: { type: string } }
+        - { name: agent, in: query, required: false, schema: { type: string } }
+        - { name: types, in: query, required: false, schema: { type: string }, description: "comma-separated DebugEvent types" }
+      responses:
+        "200":
+          description: a batch of events + the next cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { type: object } }
+                  cursor: { type: integer }
+                  dropped: { type: boolean }
+                required: [events, cursor, dropped]

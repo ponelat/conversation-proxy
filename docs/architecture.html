@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>conversation-proxy — Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --line: #2b333f;
+    --ink: #e6edf3; --muted: #9aa7b4; --faint: #6b7785;
+    --accent: #58a6ff; --green: #3fb950; --amber: #d29922; --purple: #bc8cff;
+    --pink: #f778ba; --radius: 12px; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
+
+  header.hero {
+    padding: 64px 24px 40px; text-align: center;
+    background: radial-gradient(1200px 400px at 50% -120px, #1b2740 0%, transparent 70%);
+    border-bottom: 1px solid var(--line);
+  }
+  .hero h1 { font-size: 2.4rem; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .hero h1 .mono { color: var(--accent); font-size: 0.92em; }
+  .hero p { color: var(--muted); max-width: 660px; margin: 0 auto; font-size: 1.05rem; }
+  .badges { margin-top: 18px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 12px;
+  }
+  .badge b { color: var(--ink); font-weight: 600; }
+
+  nav.toc {
+    position: sticky; top: 0; z-index: 5; backdrop-filter: blur(8px);
+    background: rgba(13,17,23,0.82); border-bottom: 1px solid var(--line);
+    display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 10px 16px;
+  }
+  nav.toc a { color: var(--muted); font-size: 13px; padding: 4px 10px; border-radius: 8px; }
+  nav.toc a:hover { color: var(--ink); background: var(--panel); text-decoration: none; }
+
+  section { margin-top: 56px; }
+  h2 { font-size: 1.4rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 .num { color: var(--faint); font-family: var(--mono); font-size: 0.8em; margin-right: 10px; }
+  .lede { color: var(--muted); margin: 0 0 22px; max-width: 760px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+  .grid { display: grid; gap: 14px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 820px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .card h3 { margin: 0 0 4px; font-size: 0.98rem; display: flex; align-items: center; gap: 8px; }
+  .card .file { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .card p { margin: 8px 0 0; color: var(--muted); font-size: 13.5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--faint); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { color: var(--purple); background: var(--panel2); padding: 1px 6px; border-radius: 5px; }
+  tr:last-child td { border-bottom: none; }
+
+  .pill { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); }
+  .pill.get { color: var(--green); } .pill.post { color: var(--amber); }
+  .pill.ctrl { color: var(--accent); } .pill.dbg { color: var(--pink); } .pill.open { color: var(--faint); }
+
+  pre {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; color: #c9d4e0;
+  }
+  .k { color: var(--pink); } .s { color: var(--green); } .c { color: var(--faint); } .fn { color: var(--accent); }
+
+  figure { margin: 0; }
+  figcaption { color: var(--faint); font-size: 12px; text-align: center; margin-top: 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  .svg-text { fill: var(--ink); font-family: var(--mono); font-size: 12px; }
+  .svg-sub { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+  .svg-label { fill: var(--faint); font-family: var(--mono); font-size: 10px; }
+
+  .note { border-left: 3px solid var(--amber); background: rgba(210,153,34,0.08); padding: 12px 16px; border-radius: 0 8px 8px 0; color: var(--muted); font-size: 13.5px; }
+  .note b { color: var(--ink); }
+  ul.tight { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+  ul.tight li { margin: 3px 0; }
+  .tag { display:inline-block; font-family: var(--mono); font-size: 10px; padding: 1px 7px; border-radius: 5px; border:1px solid var(--line); color: var(--muted); margin-left:6px; }
+  .tag.def { color: var(--amber); border-color: rgba(210,153,34,0.4); }
+  footer { margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1><span class="mono">conversation-proxy</span></h1>
+  <p>An observable proxy between an application and an LLM provider. It owns conversation
+     persistence, composes context intentionally from a generic hierarchy, and records the
+     <em>exact</em> context sent to the model so it can be polled live, replayed, and evaluated.</p>
+  <div class="badges">
+    <span class="badge"><b>Node.js</b> · TypeScript</span>
+    <span class="badge"><b>Hono</b> HTTP</span>
+    <span class="badge">standalone <b>or</b> embedded</span>
+    <span class="badge"><b>Postgres</b> / in-memory</span>
+    <span class="badge">v1 · text-only core</span>
+    <span class="badge">Apache-2.0</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#overview">Overview</a>
+  <a href="#pipeline">Pipeline</a>
+  <a href="#layers">Layers</a>
+  <a href="#deploy">Deployment</a>
+  <a href="#debug">Debug plane</a>
+  <a href="#api">HTTP API</a>
+  <a href="#decisions">Decisions</a>
+  <a href="#deferred">Deferred</a>
+</nav>
+
+<div class="wrap">
+
+<!-- OVERVIEW -->
+<section id="overview">
+  <h2><span class="num">01</span>What it is</h2>
+  <p class="lede">One front door — <code>send()</code> — backed by a handful of swappable interfaces.
+     Each layer changes for a different reason and is wired together by constructor injection; the HTTP
+     layer is just an adapter over the facade, so the same core runs standalone or embedded in a Next.js server.</p>
+  <div class="grid cols-3">
+    <div class="card">
+      <h3><span class="dot" style="background:var(--green)"></span>Intentional context</h3>
+      <p>An <b>assembler</b> composes the prompt from ordered, stability-tagged segments — domain-aware but vendor-agnostic.</p>
+    </div>
+    <div class="card">
+      <h3><span class="dot" style="background:var(--accent)"></span>Generic hierarchy</h3>
+      <p>Conversations are addressed by an ordered array of opaque IDs (<code>["user_42","client_88",…]</code>). The server attaches no meaning to any level.</p>
+    </div>
+    <div class="card">
+      <h3><span class="dot" style="background:var(--purple)"></span>Observable by default</h3>
+      <p>Every call writes a <b>CallRecord</b> envelope and emits lifecycle events to a pollable debug log.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PIPELINE -->
+<section id="pipeline">
+  <h2><span class="num">02</span>The send pipeline</h2>
+  <p class="lede">One path serves every agent. Persistence is a hook, not a mode — a <code>persist:false</code>
+     utility agent runs the identical flow with steps&nbsp;1 and&nbsp;5 turned into no-ops.</p>
+  <div class="panel">
+  <figure>
+  <svg viewBox="0 0 980 470" role="img" aria-label="send() pipeline diagram">
+    <defs>
+      <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="#6b7785"/>
+      </marker>
+      <style>
+        .box{fill:#1c2330;stroke:#2b333f;rx:9}
+        .flow{stroke:#6b7785;stroke-width:1.4;fill:none;marker-end:url(#arrow)}
+        .flow.em{stroke:#bc8cff;stroke-dasharray:4 3}
+      </style>
+    </defs>
+
+    <!-- client -->
+    <rect class="box" x="20" y="30" width="150" height="54" rx="9"/>
+    <text class="svg-text" x="95" y="54" text-anchor="middle">App / Next.js</text>
+    <text class="svg-sub" x="95" y="70" text-anchor="middle">HTTP · app.fetch</text>
+
+    <!-- facade -->
+    <rect class="box" x="20" y="200" width="150" height="60" rx="9" stroke="#58a6ff"/>
+    <text class="svg-text" x="95" y="225" text-anchor="middle">ConversationAgent</text>
+    <text class="svg-sub" x="95" y="242" text-anchor="middle">.send()  — facade</text>
+
+    <!-- steps -->
+    <g>
+      <rect class="box" x="250" y="20" width="200" height="50" rx="9"/>
+      <text class="svg-text" x="350" y="42" text-anchor="middle">1 · persist.beginTurn</text>
+      <text class="svg-sub" x="350" y="58" text-anchor="middle">ensure conversation</text>
+
+      <rect class="box" x="250" y="92" width="200" height="50" rx="9" stroke="#3fb950"/>
+      <text class="svg-text" x="350" y="114" text-anchor="middle">2 · assemble()</text>
+      <text class="svg-sub" x="350" y="130" text-anchor="middle">tagged segments</text>
+
+      <rect class="box" x="250" y="164" width="200" height="50" rx="9"/>
+      <text class="svg-text" x="350" y="186" text-anchor="middle">3 · cache.prepare()</text>
+      <text class="svg-sub" x="350" y="202" text-anchor="middle">passthrough (v1)</text>
+
+      <rect class="box" x="250" y="236" width="200" height="50" rx="9" stroke="#d29922"/>
+      <text class="svg-text" x="350" y="258" text-anchor="middle">4 · proxy.complete()</text>
+      <text class="svg-sub" x="350" y="274" text-anchor="middle">+ telemetry</text>
+
+      <rect class="box" x="250" y="308" width="200" height="50" rx="9"/>
+      <text class="svg-text" x="350" y="330" text-anchor="middle">5 · persist.endTurn</text>
+      <text class="svg-sub" x="350" y="346" text-anchor="middle">store user + reply</text>
+    </g>
+
+    <!-- provider -->
+    <rect class="box" x="530" y="236" width="170" height="50" rx="9"/>
+    <text class="svg-text" x="615" y="258" text-anchor="middle">Provider</text>
+    <text class="svg-sub" x="615" y="274" text-anchor="middle">OpenAI · Fake</text>
+
+    <!-- store -->
+    <rect class="box" x="530" y="320" width="170" height="50" rx="9"/>
+    <text class="svg-text" x="615" y="342" text-anchor="middle">ConversationStore</text>
+    <text class="svg-sub" x="615" y="358" text-anchor="middle">Memory · Postgres</text>
+
+    <!-- side outputs -->
+    <rect class="box" x="770" y="120" width="190" height="56" rx="9" stroke="#bc8cff"/>
+    <text class="svg-text" x="865" y="143" text-anchor="middle">DebugEventLog</text>
+    <text class="svg-sub" x="865" y="160" text-anchor="middle">emit() → poll by cursor</text>
+
+    <rect class="box" x="770" y="236" width="190" height="56" rx="9" stroke="#bc8cff"/>
+    <text class="svg-text" x="865" y="259" text-anchor="middle">CallRecordStore</text>
+    <text class="svg-sub" x="865" y="276" text-anchor="middle">the eval envelope</text>
+
+    <!-- flows -->
+    <path class="flow" d="M95,84 L95,200"/>
+    <path class="flow" d="M170,222 L250,45"/>
+    <path class="flow" d="M170,228 L250,117"/>
+    <path class="flow" d="M170,232 L250,189"/>
+    <path class="flow" d="M170,240 L250,261"/>
+    <path class="flow" d="M170,250 L250,333"/>
+    <path class="flow" d="M450,261 L530,261"/>
+    <path class="flow" d="M450,333 L530,345"/>
+    <!-- emit / record (ephemeral) -->
+    <path class="flow em" d="M450,40 C620,40 690,130 770,140"/>
+    <path class="flow em" d="M615,236 C700,210 720,180 770,165"/>
+    <path class="flow em" d="M615,236 L700,264"/>
+    <text class="svg-label" x="700" y="100" text-anchor="middle">events + envelope</text>
+  </svg>
+  <figcaption>Solid = control flow · dashed purple = observability side-channels (never block the call)</figcaption>
+  </figure>
+  </div>
+</section>
+
+<!-- LAYERS -->
+<section id="layers">
+  <h2><span class="num">03</span>The layers</h2>
+  <p class="lede">Independent interfaces, each with a single reason to change. The litmus test: <em>“if I change how
+     the patient record is cached, does the storage layer change?”</em> — the answer must be no.</p>
+  <div class="grid cols-2">
+    <div class="card"><h3><span class="dot" style="background:var(--accent)"></span>ConversationStore <span class="file">store/*.ts</span></h3>
+      <p>Scope-addressed conversations + messages. <code>InMemoryStore</code> and <code>PostgresStore</code> behind one interface; same test suite both backends.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--green)"></span>Assembler <span class="file">assembler/*.ts</span></h3>
+      <p>An agent hook that composes <code>AssembledContext</code> — ordered segments tagged <code>static</code>/<code>semi-static</code>/<code>volatile</code>. Default = history + current turn.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--amber)"></span>CacheStrategy <span class="file">cache/*.ts</span></h3>
+      <p>Reads stability tags, flattens to the wire shape. <code>PassthroughCache</code> in v1; <code>usage.cachedTokens</code> recorded from day one.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--amber)"></span>LLMProxy <span class="file">proxy/proxy.ts</span></h3>
+      <p><code>ObservableLLMProxy</code> wraps a <code>Provider</code>: emits events, captures latency + usage, writes the <code>CallRecord</code> — even on failure.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--faint)"></span>Provider <span class="file">provider/*.ts</span></h3>
+      <p>The only vendor-aware piece. <code>OpenAIProvider</code> (Chat Completions) and a deterministic <code>FakeProvider</code>.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--accent)"></span>Facade <span class="file">facade/agent.ts</span></h3>
+      <p><code>PersistedConversationAgent.send()</code> orchestrates the five steps and propagates one <code>traceId</code>. No oneshot branch.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--pink)"></span>DebugEventLog <span class="file">debug/*.ts</span></h3>
+      <p>Pollable lifecycle events with a monotonic cursor. In-memory ring buffer or Postgres <code>debug_events</code>, by backend.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--pink)"></span>ContextExplorer <span class="file">debug/explorer.ts</span></h3>
+      <p>Read-only: actual context for a <code>traceId</code>, a no-LLM preview, and storage browse by scope prefix.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--purple)"></span>Agent registry <span class="file">agent/*.ts</span></h3>
+      <p>Agents are manifests (programmatic or <code>*.agent.ts</code> files). Missing hooks fall back to defaults; all-or-nothing boot.</p></div>
+    <div class="card"><h3><span class="dot" style="background:var(--accent)"></span>CallRecordStore <span class="file">telemetry/*.ts</span></h3>
+      <p>The full per-call envelope — the future eval dataset. In-memory or Postgres <code>call_records</code>.</p></div>
+  </div>
+</section>
+
+<!-- DEPLOYMENT -->
+<section id="deploy">
+  <h2><span class="num">04</span>Two ways to run it</h2>
+  <p class="lede">The whole service is one Hono app, so <code>app.fetch</code> is exactly what a Next.js Route Handler wants.</p>
+  <div class="grid cols-2">
+    <div class="panel">
+      <h3 style="margin-top:0">Standalone</h3>
+      <p style="color:var(--muted);font-size:13.5px">A long-lived Node process via <code>@hono/node-server</code>.</p>
+<pre><span class="c"># dev (tsx) or built bin</span>
+npm run serve
+node dist/main.js serve</pre>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">Embedded (Next.js)</h3>
+      <p style="color:var(--muted);font-size:13.5px">Mount <code>app.fetch</code>; register agents programmatically.</p>
+<pre><span class="k">import</span> { createServer, loadConfig } <span class="k">from</span> <span class="s">"conversation-proxy"</span>;
+<span class="k">const</span> ready = <span class="fn">createServer</span>(<span class="fn">loadConfig</span>(), {
+  agents: { vet }, scanDir: <span class="k">false</span>,
+});
+<span class="k">export async function</span> <span class="fn">POST</span>(req) {
+  <span class="k">return</span> (<span class="k">await</span> ready).<span class="fn">fetch</span>(req);
+}</pre>
+    </div>
+  </div>
+  <p style="margin-top:14px" class="note"><b>Backends swap by config.</b>
+     <code>CP_STORE</code> = <code>memory</code> | <code>postgres</code> · <code>CP_PROVIDER</code> = <code>fake</code> | <code>openai</code>.
+     For serverless / multi-instance, use Postgres so the store, records, and debug log are shared across instances.</p>
+</section>
+
+<!-- DEBUG -->
+<section id="debug">
+  <h2><span class="num">05</span>Debug plane — cursor polling</h2>
+  <p class="lede">No long-lived connection. Clients poll <code>/debug/events</code> with the last cursor to get deltas —
+     works behind load balancers and serverless. Gated by a separate token and off unless <code>CP_DEBUG_ENABLED</code>.</p>
+  <div class="grid cols-2">
+    <div class="panel">
+<pre><span class="c">// 1. probe the head, then tail deltas</span>
+GET /debug/events                 <span class="c">→ {events:[], cursor: 42}</span>
+GET /debug/events?after=42        <span class="c">→ {events:[…], cursor: 47}</span>
+GET /debug/events?after=47&amp;traceId=tr_…
+
+<span class="c">// response</span>
+{ events: DebugEvent[], cursor: number, dropped: boolean }</pre>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;font-size:0.98rem">Lifecycle events</h3>
+      <ul class="tight">
+        <li><code>request.received</code></li>
+        <li><code>context.assembled</code> — segments + tokens</li>
+        <li><code>cache.prepared</code> — breakpoints</li>
+        <li><code>llm.request</code> — exact messages + system prompt</li>
+        <li><code>llm.response</code> — reply + usage + latency</li>
+        <li><code>error</code> — stage + message</li>
+        <li><code>llm.chunk</code> <span class="tag def">defined, not emitted</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- API -->
+<section id="api">
+  <h2><span class="num">06</span>HTTP API</h2>
+  <p class="lede">Two planes, authenticated separately (<code>CP_API_KEY</code> for control, <code>CP_DEBUG_TOKEN</code> for debug).
+     Documented in <code>openapi.yaml</code>; a CI test asserts the routes never drift from the spec.</p>
+  <table>
+    <thead><tr><th>Method</th><th>Path</th><th>Plane</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill get">GET</span></td><td><code>/health</code></td><td><span class="pill open">open</span></td><td>liveness</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/agents</code></td><td><span class="pill ctrl">control</span></td><td>list loaded agents</td></tr>
+      <tr><td><span class="pill post">POST</span></td><td><code>/agents/:agent/messages</code></td><td><span class="pill ctrl">control</span></td><td>the <code>send()</code> front door</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/agents/:agent/context</code></td><td><span class="pill ctrl">control</span></td><td>preview context (no LLM)</td></tr>
+      <tr><td><span class="pill post">POST</span></td><td><code>/conversations</code></td><td><span class="pill ctrl">control</span></td><td>create</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/conversations?scope=…</code></td><td><span class="pill ctrl">control</span></td><td>list by exact scope</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/conversations/:id</code></td><td><span class="pill ctrl">control</span></td><td>fetch + messages</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/records/:traceId</code></td><td><span class="pill ctrl">control</span></td><td>one call envelope</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/records?agent=&amp;scopePrefix=…</code></td><td><span class="pill ctrl">control</span></td><td>query envelopes</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/debug/events?after=…</code></td><td><span class="pill dbg">debug</span></td><td>poll event deltas</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/debug/context/:traceId</code></td><td><span class="pill dbg">debug</span></td><td>exact context sent</td></tr>
+      <tr><td><span class="pill post">POST</span></td><td><code>/debug/preview</code></td><td><span class="pill dbg">debug</span></td><td>assemble preview</td></tr>
+      <tr><td><span class="pill get">GET</span></td><td><code>/debug/explore?scope=…</code></td><td><span class="pill dbg">debug</span></td><td>browse storage + records</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- DECISIONS -->
+<section id="decisions">
+  <h2><span class="num">07</span>Key decisions</h2>
+  <p class="lede">The firm architectural decisions (D1–D17) live in the spec; these are the load-bearing ones,
+     plus the three reversed during the build.</p>
+  <div class="grid cols-2">
+    <div class="card"><h3>Three separable layers</h3><p>Store · Assembler · CacheStrategy, plus the Proxy. Each changes for a different reason. <span class="file">D1</span></p></div>
+    <div class="card"><h3>Identity is a generic array</h3><p>Ordered opaque IDs, leaf last. New levels are just longer arrays; order enables prefix lookup. <span class="file">D2</span></p></div>
+    <div class="card"><h3>Persistence is a hook, not a mode</h3><p>“One-shot” = <code>persist:false</code>. One front door, one observability path. <span class="file">D15</span></p></div>
+    <div class="card"><h3>Caching starts as passthrough</h3><p>Correctness first; usage recorded so prefix caching can be justified by data later. <span class="file">D4</span></p></div>
+    <div class="card"><h3>Node, not Deno <span class="tag">reversed D7</span></h3><p>To embed in a Node/Next.js server. Hono made the HTTP layer port cleanly.</p></div>
+    <div class="card"><h3>Embeddable + standalone <span class="tag">reversed D6</span></h3><p>One Hono app; <code>createServer()</code> returns <code>app.fetch</code> to mount anywhere.</p></div>
+    <div class="card"><h3>Debug = polling, not SSE <span class="tag">changed</span></h3><p>Cursor pagination over <code>/debug/events</code> — serverless-friendly, durable via Postgres.</p></div>
+    <div class="card"><h3>In-repo migration runner <span class="tag">reversed</span></h3><p>Inlined ordered migrations, own ledger in a dedicated schema, advisory-locked. <span class="file">D12</span></p></div>
+  </div>
+</section>
+
+<!-- DEFERRED -->
+<section id="deferred">
+  <h2><span class="num">08</span>Deferred (designed, not built)</h2>
+  <p class="lede">v1 is a lean text-only core. These are understood and additive — see <code>docs/NOT_DONE.md</code> for the full inventory and caveats.</p>
+  <div class="grid cols-3">
+    <div class="card"><h3>Blobs / multimodal</h3><p>BlobStore + media resolver; content is text-only today. <span class="file">D16, D17</span></p></div>
+    <div class="card"><h3>Extra-context store</h3><p>Scope-keyed derived domain data the assembler reads. <span class="file">D14</span></p></div>
+    <div class="card"><h3>Prefix caching</h3><p><code>PrefixCache</code> with breakpoints, once usage justifies it. <span class="file">D4</span></p></div>
+    <div class="card"><h3>SDK + types package</h3><p>The CLI client is the seed; a published SDK is later. <span class="file">D13</span></p></div>
+    <div class="card"><h3>Web observation UI</h3><p>Live view, inspector, explorer — consumes the wired debug plane.</p></div>
+    <div class="card"><h3>Client-facing streaming</h3><p>Token streaming + <code>llm.chunk</code> to the caller. <span class="file">Q4</span></p></div>
+    <div class="card"><h3>Multi-step agent loop</h3><p>Tool-calling loop inside <code>send()</code> — no interface change needed.</p></div>
+    <div class="card"><h3>Multi-provider routing</h3><p>One provider per process today; Anthropic + fallback later. <span class="file">Q5</span></p></div>
+    <div class="card"><h3>Debug-event retention</h3><p>The Postgres event log has no pruning/TTL yet. <span class="file">D10</span></p></div>
+  </div>
+</section>
+
+<footer>
+  conversation-proxy · architecture overview · generated for the v1 Node build (text-only core)<br>
+  See <code>spec-files/CONVERSATION_PROXY_HANDOFF.md</code>, <code>docs/DECISIONS.md</code>, and <code>docs/NOT_DONE.md</code>.
+</footer>
+
+</div>
+</body>
+</html>
