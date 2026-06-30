@@ -1,6 +1,6 @@
 {
   "name": "conversation-proxy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A small, observable proxy between your app and an LLM provider. Runs standalone or embeds in a Node/Next.js server.",
   "license": "Apache-2.0",
   "author": "ponelat <jponelat@gmail.com>",
