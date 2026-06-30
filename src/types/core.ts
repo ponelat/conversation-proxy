@@ -1,21 +1,42 @@
 // Core identity, JSON, and message shapes. The server attaches NO domain meaning
 // to the hierarchy — see spec D2.
 
-/**
- * The identity hierarchy, as an ordered array of opaque IDs (D2).
- * Broadest level first, leaf last, e.g. ["user_42","client_88","patient_3","2026-W26"].
- */
-export type ConversationScope = string[];
+import { BadRequest } from "@/util/errors";
 
 /**
- * Reserved separator used to serialize a scope to a storage key (D2).
- * A NUL character that cannot appear in any opaque ID. Defined via
- * fromCharCode so the source file stays free of raw control bytes.
+ * The conversation identity: a "/"-separated hierarchy path, broadest level
+ * first, leaf last — e.g. "user_42/client_88/patient_3/2026-W26" (D2). The scope
+ * IS the conversation id; there is no separate handle. To branch a fresh thread
+ * under one identity, append a "/<uuid>" segment (a pure client convention — the
+ * server attaches no meaning to any segment, including the leaf).
+ *
+ * "/" is a reserved separator: segment values may not contain it. The same string
+ * is used verbatim as the storage key, so it stays human-readable in logs.
  */
-export const SCOPE_SEP: string = String.fromCharCode(0);
+export type ConversationScope = string;
 
-/** Serialize a scope to a stable storage key. */
-export const scopeKey = (s: ConversationScope): string => s.join(SCOPE_SEP);
+/** Generous upper bound on a scope string (it is used as a storage key / PK). */
+export const MAX_SCOPE_LENGTH = 1024;
+
+/**
+ * Validate a canonical scope string (D2). Rejects rather than normalizes so that
+ * a client bug — a missing segment collapsing to "a//c" — surfaces as a 400
+ * instead of silently writing into a malformed-but-accepted conversation.
+ */
+export function validateScope(scope: ConversationScope): void {
+  if (!scope) throw new BadRequest("missing scope");
+  if (scope.length > MAX_SCOPE_LENGTH) {
+    throw new BadRequest(`scope exceeds ${MAX_SCOPE_LENGTH} characters`);
+  }
+  for (const segment of scope.split("/")) {
+    if (segment.length === 0) {
+      throw new BadRequest(
+        "scope has an empty segment (a missing id between '/' separators)",
+      );
+    }
+    if (segment.includes("\0")) throw new BadRequest("scope segment may not contain NUL");
+  }
+}
 
 export type JsonValue =
   | null
@@ -24,8 +45,6 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [k: string]: JsonValue };
-
-export type ConversationId = string;
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -45,7 +64,7 @@ export interface StoredMessage {
 }
 
 export interface ConversationMeta {
-  id: ConversationId;
+  /** The scope string — it IS the conversation id (D2). */
   scope: ConversationScope;
   title?: string;
   createdAt: string; // ISO 8601

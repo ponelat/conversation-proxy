@@ -11,7 +11,6 @@ export type DebugEvent =
     type: "request.received";
     traceId: string;
     agent: string;
-    conversationId?: string;
     scope: ConversationScope;
     ts: string;
   }
@@ -102,7 +101,6 @@ export interface ContextExplorer {
   previewContext(
     agent: string,
     scope: ConversationScope,
-    conversationId?: string,
   ): Promise<AssembledContext>;
 
   /** Browse storage by hierarchy prefix. */

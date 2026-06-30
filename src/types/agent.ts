@@ -4,26 +4,28 @@ import type {
   AssembledMessage,
   ContentPart,
   Conversation,
-  ConversationId,
   ConversationMeta,
   ConversationScope,
   StoredMessage,
 } from "./core";
 
 // --- Storage boundary (D2) --------------------------------------------------
+// The scope IS the conversation id (D2): one scope maps to exactly one
+// conversation. Lookups are by scope; there is no separate handle.
 
 export interface ConversationStore {
-  listConversations(scope: ConversationScope): Promise<ConversationMeta[]>;
-  /** Prefix query for the debug explorer: every conversation under a scope prefix. */
+  /**
+   * Every conversation at or under a scope prefix (debug explorer). Boundary-aware:
+   * matches the exact scope and any descendant (`scope === prefix || starts with
+   * `prefix + "/"`), never a bare string prefix.
+   */
   listConversationsByPrefix(prefix: ConversationScope): Promise<ConversationMeta[]>;
-  getConversation(id: ConversationId): Promise<Conversation | null>;
-  createConversation(
-    scope: ConversationScope,
-    meta?: Partial<ConversationMeta>,
-  ): Promise<Conversation>;
-  appendMessages(id: ConversationId, msgs: StoredMessage[]): Promise<void>;
+  getConversation(scope: ConversationScope): Promise<Conversation | null>;
+  /** Idempotent get-or-create — safe under concurrent first turns on one scope. */
+  getOrCreateConversation(scope: ConversationScope): Promise<Conversation>;
+  appendMessages(scope: ConversationScope, msgs: StoredMessage[]): Promise<void>;
   getMessages(
-    id: ConversationId,
+    scope: ConversationScope,
     opts?: { limit?: number; before?: string },
   ): Promise<StoredMessage[]>;
 }
@@ -31,7 +33,7 @@ export interface ConversationStore {
 /** Read-only slice handed to assembler hooks — read, never write (D11). */
 export type ReadOnlyConversationStore = Pick<
   ConversationStore,
-  "listConversations" | "getConversation" | "getMessages"
+  "getConversation" | "getMessages"
 >;
 
 // --- Assembler (D3, D16) ----------------------------------------------------
@@ -51,7 +53,8 @@ export interface AssembledContext {
 
 export interface AssemblerInput {
   scope: ConversationScope;
-  conversationId?: ConversationId; // absent for non-persisting agents (D15)
+  /** Whether this agent persists — false for utility agents, which have no history (D15). */
+  persisted: boolean;
   message: ContentPart[]; // the incoming user turn's parts
   store: ReadOnlyConversationStore;
 }
@@ -82,16 +85,12 @@ export interface CacheStrategy {
 // This avoids the double-count that loadHistory + appended-current-turn implies.
 
 export interface PersistenceHook {
-  /** Ensure a conversation exists; return its id. undefined when persistence is off. */
-  beginTurn(
-    scope: ConversationScope,
-    conversationId?: ConversationId,
-  ): Promise<ConversationId | undefined>;
+  /** Ensure the conversation for this scope exists. No-op when persistence is off. */
+  beginTurn(scope: ConversationScope): Promise<void>;
 
   /** Persist the user + assistant turns. No-op when persistence is off. */
   endTurn(
     scope: ConversationScope,
-    conversationId: ConversationId | undefined,
     user: StoredMessage,
     assistant: StoredMessage,
   ): Promise<void>;
