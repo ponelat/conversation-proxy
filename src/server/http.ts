@@ -62,10 +62,10 @@ export function buildHttpApp(app: App): Hono {
 
   http.post("/agents/:agent/messages", async (c) => {
     const body = await c.req.json();
+    if (typeof body.scope !== "string") throw new BadRequest("`scope` must be a string");
     const res = await facade.send({
       agent: c.req.param("agent"),
       scope: body.scope,
-      conversationId: body.conversationId,
       input: normalizeInput(body.input),
     });
     return c.json(res);
@@ -75,27 +75,16 @@ export function buildHttpApp(app: App): Hono {
     const ctx = await explorer.previewContext(
       c.req.param("agent"),
       parseScope(c.req.query("scope")),
-      c.req.query("conversationId"),
     );
     return c.json(ctx);
   });
 
-  http.post("/conversations", async (c) => {
-    const body = await c.req.json();
-    if (!Array.isArray(body.scope)) throw new BadRequest("`scope` must be an array");
-    const conv = await store.createConversation(body.scope, body.meta);
-    const { messages: _m, ...meta } = conv;
-    return c.json(meta, 201);
-  });
-
-  http.get(
-    "/conversations",
-    async (c) => c.json(await store.listConversations(parseScope(c.req.query("scope")))),
-  );
-
-  http.get("/conversations/:id", async (c) => {
-    const conv = await store.getConversation(c.req.param("id"));
-    if (!conv) throw new NotFound(`unknown conversation: ${c.req.param("id")}`);
+  // A conversation is addressed by its scope (the scope IS the id, D2). The scope
+  // contains "/", so it rides in the query param, not the path. It is created by
+  // being talked to (POST /agents/:agent/messages), not by explicit creation.
+  http.get("/conversations", async (c) => {
+    const conv = await store.getConversation(parseScope(c.req.query("scope")));
+    if (!conv) throw new NotFound(`unknown conversation: ${c.req.query("scope")}`);
     return c.json(conv);
   });
 
@@ -111,7 +100,6 @@ export function buildHttpApp(app: App): Hono {
       await records.query({
         agent: q.agent,
         scopePrefix: parseScopeOptional(q.scopePrefix),
-        conversationId: q.conversationId,
         model: q.model,
         since: q.since,
         until: q.until,
@@ -153,7 +141,8 @@ export function buildHttpApp(app: App): Hono {
 
   http.post("/debug/preview", async (c) => {
     const body = await c.req.json();
-    return c.json(await explorer.previewContext(body.agent, body.scope, body.conversationId));
+    if (typeof body.scope !== "string") throw new BadRequest("`scope` must be a string");
+    return c.json(await explorer.previewContext(body.agent, body.scope));
   });
 
   http.get(
