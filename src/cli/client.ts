@@ -104,6 +104,7 @@ export class ConversationProxyClient {
     return this.#req("/records", {
       query: {
         agent: filter.agent,
+        scope: filter.scope ? encodeScope(filter.scope) : undefined,
         scopePrefix: filter.scopePrefix ? encodeScope(filter.scopePrefix) : undefined,
         model: filter.model,
         since: filter.since,

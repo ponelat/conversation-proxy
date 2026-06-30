@@ -99,6 +99,7 @@ export function buildHttpApp(app: App): Hono {
     return c.json(
       await records.query({
         agent: q.agent,
+        scope: parseScopeOptional(q.scope),
         scopePrefix: parseScopeOptional(q.scopePrefix),
         model: q.model,
         since: q.since,

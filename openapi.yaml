@@ -151,6 +151,12 @@ paths:
       security: [{ controlToken: [] }]
       parameters:
         - { name: agent, in: query, schema: { type: string } }
+        - {
+            name: scope,
+            in: query,
+            schema: { type: string },
+            description: "exact scope — all call records for one conversation",
+          }
         - { name: scopePrefix, in: query, schema: { type: string } }
         - { name: model, in: query, schema: { type: string } }
         - { name: since, in: query, schema: { type: string } }

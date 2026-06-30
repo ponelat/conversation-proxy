@@ -26,7 +26,8 @@ Usage:
   conversation-proxy agents                         list loaded agents
   conversation-proxy send --agent <a> --scope a/b/c --input "..."
   conversation-proxy preview --agent <a> --scope a/b/c
-  conversation-proxy record <traceId>               fetch a call envelope
+  conversation-proxy record <traceId>               fetch one call envelope by trace id
+  conversation-proxy records --scope a/b/c [--agent <a>]   list a scope's call records (trace ids)
   conversation-proxy explore --scope a/b/c          browse storage (debug plane)
   conversation-proxy stream [--trace <id>] [--agent <a>] [--types a,b]   tail debug events
 
@@ -135,6 +136,14 @@ async function main() {
       const traceId = flags.trace ?? positionals[0];
       if (!traceId) throw new Error("record requires a traceId");
       pretty(await client().getRecord(traceId));
+      break;
+    }
+
+    case "records": {
+      if (!flags.scope) throw new Error("records requires --scope");
+      pretty(
+        await client().queryRecords({ scope: parseScope(flags.scope), agent: flags.agent }),
+      );
       break;
     }
 

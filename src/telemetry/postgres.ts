@@ -57,6 +57,7 @@ export class PostgresCallRecordStore implements CallRecordStore {
       clauses.push(sql.replace("$?", `$${args.length}`));
     };
     if (filter.agent) add("agent = $?", filter.agent);
+    if (filter.scope) add("scope = $?", filter.scope);
     if (filter.model) add("model = $?", filter.model);
     if (filter.since) add("ts >= $?::timestamptz", filter.since);
     if (filter.until) add("ts <= $?::timestamptz", filter.until);

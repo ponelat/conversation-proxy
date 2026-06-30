@@ -59,6 +59,7 @@ export interface CallRecord {
 
 export interface CallRecordFilter {
   agent?: string;
+  scope?: ConversationScope; // match records for this exact scope (one conversation)
   scopePrefix?: ConversationScope; // match records at or under this scope prefix
   model?: string;
   since?: string;

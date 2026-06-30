@@ -54,6 +54,7 @@ npm run serve                     # http://localhost:8787  (or: npx tsx src/main
 | `send --agent <a> --scope a/b/c --input "..."` | yes | reply on **stdout**; `traceId`/usage on **stderr** |
 | `preview --agent <a> --scope a/b/c` | yes | JSON `AssembledContext` (no LLM call) |
 | `record <traceId>` | yes | JSON `CallRecord` (the full envelope sent) |
+| `records --scope a/b/c [--agent <a>]` | yes | JSON `CallRecordMeta[]` — a scope's traces (most-recent first), each with its `traceId` |
 | `explore --scope a/b/c` | yes (debug enabled) | JSON `{conversations, records}` |
 | `stream [--trace <id>] [--agent <a>] [--types a,b]` | yes (debug enabled) | tails debug events (polls; Ctrl-C to stop) |
 | `serve [--migrate-on-startup]` | — | starts the service |
@@ -94,9 +95,15 @@ To start a **fresh** thread under the same identity, append a unique segment
 ### Inspect what was / would be sent
 
 ```sh
-npx tsx src/main.ts record <traceId>                       # exact context + usage + latency for a past call
+npx tsx src/main.ts records --scope u/c                    # all traces for a scope (no traceId needed)
+npx tsx src/main.ts record <traceId>                       # exact context + usage + latency for one call
 npx tsx src/main.ts preview --agent vet --scope u/c        # what WOULD be assembled, no LLM call
 ```
+
+`records --scope` is the "I have a scope, not a trace id" entry point: it lists the
+conversation's call records most-recent first, each with its `traceId` — pull the
+id from there into `record <traceId>` for the full envelope. Add `--agent` to
+narrow. (Matches the exact scope, not its `/<uuid>` branches.)
 
 ### Watch / poll debug events
 

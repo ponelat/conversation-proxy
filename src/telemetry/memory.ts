@@ -31,6 +31,7 @@ export class InMemoryCallRecordStore implements CallRecordStore {
     const out = [...this.#byTrace.values()]
       .filter((r) => (filter.agent ? r.agent === filter.agent : true))
       .filter((r) => (filter.model ? r.model === filter.model : true))
+      .filter((r) => (filter.scope ? r.scope === filter.scope : true))
       .filter((r) => (filter.scopePrefix ? underPrefix(r.scope, filter.scopePrefix) : true))
       .filter((r) => (filter.since ? r.timestamp >= filter.since : true))
       .filter((r) => (filter.until ? r.timestamp <= filter.until : true))
